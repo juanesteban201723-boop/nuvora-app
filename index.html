@@ -124,6 +124,10 @@
   .auth-switch a{ color:var(--blue); cursor:pointer; font-weight:600; }
   .auth-error{ background:var(--red-bg); color:var(--red); font-size:12.5px; padding:9px 11px; border-radius:5px; margin-bottom:12px; }
   .role-pill{ display:inline-block; font-family:'IBM Plex Mono',monospace; font-size:10px; padding:3px 8px; border-radius:100px; background:var(--blue-bg); color:var(--blue); font-weight:600; }
+  .conn-status{ font-family:'IBM Plex Mono',monospace; font-size:9.5px; margin-top:4px; font-weight:600; }
+  .conn-status.online{ color:var(--green); }
+  .conn-status.offline{ color:var(--red); }
+  .conn-status.syncing{ color:var(--blue-dark); }
   select.role-select{ font-size:12.5px; padding:6px 8px; border:1px solid var(--line); border-radius:4px; background:var(--paper); }
 
   /* Desktop / computer screens: use the extra space instead of a narrow centered column */
@@ -190,6 +194,7 @@
     <div class="user-chip">
       <b id="userNameDisplay"></b>
       <span id="userRoleDisplay" class="role-pill"></span>
+      <div id="connStatus" class="conn-status"></div>
       <span class="logout-link" id="logoutBtn">Cerrar sesión</span>
     </div>
   </header>
@@ -217,6 +222,27 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
+
+// Habilita el modo sin conexión: guarda datos localmente y sincroniza solo cuando vuelve internet
+db.enablePersistence({synchronizeTabs:true}).catch(err=>{
+  if(err.code==='failed-precondition'){
+    console.warn('Persistencia offline no disponible: hay otra pestaña abierta con esta app.');
+  } else if(err.code==='unimplemented'){
+    console.warn('Este navegador no soporta guardado offline.');
+  }
+});
+
+async function obtenerSiguienteNumeroRemision(){
+  const ref = db.collection('settings').doc('config');
+  let nuevoNumero;
+  await db.runTransaction(async (t)=>{
+    const doc = await t.get(ref);
+    const actual = (doc.exists && doc.data().ultimoNumeroRemision) ? Number(doc.data().ultimoNumeroRemision) : 49;
+    nuevoNumero = actual + 1;
+    t.set(ref, {ultimoNumeroRemision: nuevoNumero}, {merge:true});
+  });
+  return nuevoNumero;
+}
 
 let currentUser = null;   // {uid, email}
 let myRole = null;        // 'admin' | 'produccion' | 'inventario' | 'administrativo' | 'sin-asignar'
@@ -361,6 +387,22 @@ function traducirErrorAuth(e){
   return 'Ocurrió un error: ' + (e.message || code);
 }
 
+// ---------- Estado de conexión (online/offline) ----------
+let isOnline = navigator.onLine;
+function actualizarEstadoConexion(){
+  const el = document.getElementById('connStatus');
+  if(!el) return;
+  if(isOnline){
+    el.textContent = '🟢 En línea';
+    el.className = 'conn-status online';
+  } else {
+    el.textContent = '🔴 Sin conexión — se guarda y se sube después';
+    el.className = 'conn-status offline';
+  }
+}
+window.addEventListener('online', ()=>{ isOnline = true; actualizarEstadoConexion(); });
+window.addEventListener('offline', ()=>{ isOnline = false; actualizarEstadoConexion(); });
+
 auth.onAuthStateChanged(async (user)=>{
   cleanupListeners();
   if(!user){
@@ -393,6 +435,7 @@ auth.onAuthStateChanged(async (user)=>{
   document.getElementById('appWrap').style.display='block';
   document.getElementById('userNameDisplay').textContent = myNombre;
   document.getElementById('userRoleDisplay').textContent = etiquetaRol(myRole);
+  actualizarEstadoConexion();
 
   const tabs = getTabsForCurrentUser();
   activeTab = tabs.length ? tabs[0].id : null;
@@ -1031,69 +1074,67 @@ const LOGO_NUVORA_B64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASwAAAEsC
 function generarRemisionPDF(venta){
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({unit:'mm', format:'a4'});
-  const pageW = 210, pageH = 297;
-  const margin = 12;
+  const pageW = 210;
+  const margin = 15;
+  const boxW = pageW - margin*2;
   const navy = [20, 40, 75];
-  const gold = [169, 130, 47];
+  const numero = venta.numeroRemision ? String(venta.numeroRemision) : String(venta.id||'').slice(-6).toUpperCase();
 
-  // Borde exterior
-  doc.setDrawColor(...navy);
-  doc.setLineWidth(0.6);
-  doc.rect(margin, margin, pageW-margin*2, pageH-margin*2 - 220);
+  // ---- Encabezado (logo + datos empresa a la izquierda, REMISION a la derecha) ----
+  const headerTop = margin;
+  const headerH = 46;
 
-  // Logo (arriba izquierda)
-  try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', margin+4, margin+4, 34, 34); }catch(e){}
+  try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', margin+2, headerTop+2, 30, 30); }catch(e){}
 
   doc.setFont('helvetica','bold');
   doc.setFontSize(9);
   doc.setTextColor(...navy);
-  doc.text('NUVORA COMFORT S.A.S', margin+4, margin+44);
+  doc.text('NUVORA COMFORT S.A.S', margin+2, headerTop+37);
   doc.setFont('helvetica','normal');
   doc.setFontSize(8);
-  doc.text('NIT 9020856647', margin+4, margin+49);
-  doc.text('Sucursal Barranquilla', margin+4, margin+54);
+  doc.text('NIT 9020856647', margin+2, headerTop+42);
+  doc.text('Sucursal Barranquilla', margin+2, headerTop+47);
 
-  // Título REMISIÓN (arriba derecha)
   doc.setFont('helvetica','bold');
   doc.setFontSize(20);
-  doc.setTextColor(...navy);
-  doc.text('REMISIÓN', pageW-margin-4, margin+14, {align:'right'});
+  doc.text('REMISION', margin+boxW-2, headerTop+12, {align:'right'});
 
   doc.setDrawColor(...navy);
   doc.setLineWidth(0.4);
-  doc.rect(pageW-margin-46, margin+18, 46, 10);
+  doc.rect(margin+boxW-46, headerTop+16, 46, 10);
   doc.setFont('helvetica','normal');
   doc.setFontSize(10);
-  doc.text('N.°', pageW-margin-42, margin+25);
+  doc.text('N.', margin+boxW-42, headerTop+23);
   doc.setFont('helvetica','bold');
-  doc.text(String(venta.id||'').slice(-6).toUpperCase(), pageW-margin-8, margin+25, {align:'right'});
+  doc.text(numero, margin+boxW-3, headerTop+23, {align:'right'});
 
-  // Datos: Fecha, Dirección, Ciudad, Teléfono
+  // ---- Datos del cliente (Fecha, Cliente, Direccion, Telefono) ----
   const cliente = state.clientes.find(c=>c.nombre===venta.cliente) || {};
-  let y = margin+36;
+  let y = headerTop + headerH + 8;
   doc.setFontSize(10);
   const campo = (label, valor) => {
-    doc.setFont('helvetica','bold'); doc.text(label, pageW-margin-70, y);
+    doc.setFont('helvetica','bold'); doc.setTextColor(...navy);
+    doc.text(label, margin, y);
     doc.setFont('helvetica','normal');
     doc.setLineWidth(0.2); doc.setDrawColor(...navy);
-    doc.line(pageW-margin-46, y+1, pageW-margin-4, y+1);
-    doc.text(String(valor||''), pageW-margin-44, y);
+    doc.line(margin+26, y+1, margin+boxW, y+1);
+    doc.text(String(valor||''), margin+28, y);
     y += 8;
   };
   campo('Fecha:', venta.fecha);
-  campo('Dirección:', cliente.direccion || '');
-  campo('Ciudad:', '');
-  campo('Teléfono:', cliente.telefono || '');
+  campo('Cliente:', venta.cliente);
+  campo('Direccion:', cliente.direccion || '');
+  campo('Telefono:', cliente.telefono || '');
 
-  // Tabla
-  const tableY = margin+70;
+  // ---- Tabla ----
+  const tableY = y + 4;
   doc.autoTable({
     startY: tableY,
-    margin: {left: margin+4, right: margin+4},
+    margin: {left: margin, right: margin},
     head: [['CANTIDAD','DETALLE','VALOR UNITARIO','VALOR']],
     body: [[
       `${fmt(venta.cmVendidos)} cm`,
-      'Casata (espuma dura reciclada)',
+      'Casata',
       fmtMoney(venta.precioPorCm),
       fmtMoney(venta.total)
     ]],
@@ -1104,24 +1145,38 @@ function generarRemisionPDF(venta){
     styles: { lineColor: navy, lineWidth: 0.3, fontSize: 10, cellPadding: 4 },
   });
 
-  const finalY = doc.lastAutoTable.finalY + 20;
+  // ---- Aprobado por ----
+  let afterTableY = doc.lastAutoTable.finalY + 8;
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(9);
+  doc.setTextColor(...navy);
+  doc.text(`Aprobado por: ${venta.creadoPor || '-'}`, margin, afterTableY);
+
+  // ---- Firma y Sello / Recibido por ----
+  const finalY = afterTableY + 22;
   doc.setFont('helvetica','bold');
   doc.setFontSize(10);
-  doc.text('Firma y Sello', margin+4, finalY);
+  doc.text('Firma y Sello', margin, finalY);
   doc.setLineWidth(0.2);
-  doc.line(margin+4, finalY+14, margin+70, finalY+14);
+  doc.line(margin, finalY+14, margin+62, finalY+14);
 
+  const rightColX = margin + boxW/2;
   doc.setFont('helvetica','normal');
-  doc.text('Recibido por: ______________________', pageW/2-6, finalY);
-  doc.text('CC: ______________________', pageW/2-6, finalY+8);
+  doc.text('Recibido por: ______________________', rightColX, finalY);
+  doc.text('CC: ______________________', rightColX, finalY+8);
   doc.setFontSize(9);
-  doc.text('Recibí de conformidad', pageW/2-6, finalY+16);
-  doc.text('a plena satisfacción.', pageW/2-6, finalY+21);
+  doc.text('Recibi de conformidad', rightColX, finalY+16);
+  doc.text('a plena satisfaccion.', rightColX, finalY+21);
+
+  // ---- Borde exterior (tamano correcto para todo el contenido) ----
+  const boxBottom = finalY + 30;
+  doc.setDrawColor(...navy);
+  doc.setLineWidth(0.6);
+  doc.rect(margin, margin, boxW, boxBottom - margin);
 
   const blob = doc.output('blob');
-  downloadOrShareBlob(blob, `remision-${venta.cliente.replace(/\\s+/g,'-')}-${venta.fecha}.pdf`, 'application/pdf');
+  downloadOrShareBlob(blob, `remision-${numero}-${venta.cliente.replace(/\s+/g,'-')}.pdf`, 'application/pdf');
 }
-
 function renderVentas(){
   const canEdit = myRole==='admin';
   const stockTerminado = stockCasataTerminada();
@@ -1885,9 +1940,11 @@ function attachHandlers(){
     if(!cliente || !cmVendidos) return;
     const total = Number(cmVendidos) * Number(precioPorCm);
     try{
+      const numeroRemision = await obtenerSiguienteNumeroRemision();
       await db.collection('ventas').add({
         cliente, fecha, cmVendidos:Number(cmVendidos), precioPorCm:Number(precioPorCm),
-        total, formaPago, pagado: formaPago==='efectivo'
+        total, formaPago, pagado: formaPago==='efectivo',
+        numeroRemision, creadoPor: myNombre
       });
     }catch(e){ alert('No se pudo registrar la venta: ' + e.message); }
   };
