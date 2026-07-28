@@ -1456,30 +1456,116 @@ function exportReportePDF(){
   downloadOrShareBlob(pdfBlob, `nuvora-informe-${reporteDesde}-a-${reporteHasta}.pdf`, 'application/pdf');
 }
 
+function exportCarteraExcel(){
+  const pendientes = ventasConSaldoPendiente();
+  const porCliente = {};
+  pendientes.forEach(v=>{ if(!porCliente[v.cliente]) porCliente[v.cliente]=[]; porCliente[v.cliente].push(v); });
+  const nombres = Object.keys(porCliente).sort();
+
+  const wb = XLSX.utils.book_new();
+
+  const resumen = nombres.map(nombre=>{
+    const vs = porCliente[nombre];
+    return {Cliente:nombre, 'Total Adeudado': vs.reduce((s,v)=>s+saldoPendiente(v),0), 'N° Pedidos Pendientes': vs.length};
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen.length?resumen:[{Cliente:'Sin cartera pendiente'}]), 'Resumen por Cliente');
+
+  const detalle = [];
+  nombres.forEach(nombre=>{
+    porCliente[nombre].sort((a,b)=>a.fecha.localeCompare(b.fecha)).forEach(v=>{
+      detalle.push({Cliente:nombre, Tipo:'Pedido', Fecha:v.fecha, Monto:v.total, 'Saldo Pendiente':saldoPendiente(v), 'Días':diasDeuda(v)});
+      state.abonos.filter(a=>a.ventaId===v.id).sort((a,b)=>a.fecha.localeCompare(b.fecha)).forEach(a=>{
+        detalle.push({Cliente:nombre, Tipo:'Abono', Fecha:a.fecha, Monto:-a.monto, 'Saldo Pendiente':'', 'Días':''});
+      });
+    });
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle.length?detalle:[{Cliente:'Sin movimientos'}]), 'Detalle Pedidos y Abonos');
+
+  const wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+  const blob = new Blob([wbout], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  downloadOrShareBlob(blob, `nuvora-estado-cartera-${todayISO()}.xlsx`, blob.type);
+}
+
+function exportCarteraPDF(){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const pendientes = ventasConSaldoPendiente();
+  const porCliente = {};
+  pendientes.forEach(v=>{ if(!porCliente[v.cliente]) porCliente[v.cliente]=[]; porCliente[v.cliente].push(v); });
+  const nombres = Object.keys(porCliente).sort();
+  const totalGeneral = pendientes.reduce((s,v)=>s+saldoPendiente(v),0);
+
+  try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', 14, 8, 20, 20); }catch(e){}
+  doc.setFontSize(16); doc.text('Nuvora — Estado de Cartera', 38, 16);
+  doc.setFontSize(10); doc.text(`Al ${todayISO()}  ·  Total adeudado: ${fmtMoney(totalGeneral)}`, 38, 23);
+
+  let startY = 32;
+  if(nombres.length===0){
+    doc.setFontSize(11); doc.text('No hay cartera pendiente — todo al día.', 14, startY);
+  }
+  nombres.forEach(nombre=>{
+    const vs = porCliente[nombre].sort((a,b)=>a.fecha.localeCompare(b.fecha));
+    const totalCliente = vs.reduce((s,v)=>s+saldoPendiente(v),0);
+    if(startY > 260){ doc.addPage(); startY = 20; }
+    doc.setFontSize(12); doc.setTextColor(31,78,121);
+    doc.text(`${nombre}  —  Debe: ${fmtMoney(totalCliente)}`, 14, startY);
+    doc.setTextColor(0,0,0);
+
+    const body = [];
+    vs.forEach(v=>{
+      body.push([v.fecha, 'Pedido', fmtMoney(v.total), fmtMoney(saldoPendiente(v))]);
+      state.abonos.filter(a=>a.ventaId===v.id).sort((a,b)=>a.fecha.localeCompare(b.fecha)).forEach(a=>{
+        body.push([a.fecha, 'Abono', `-${fmtMoney(a.monto)}`, '']);
+      });
+    });
+    doc.autoTable({
+      startY: startY+4,
+      head:[['Fecha','Tipo','Monto','Saldo pedido']],
+      body,
+      theme:'striped', headStyles:{fillColor:[31,78,121]}, styles:{fontSize:9}
+    });
+    startY = doc.lastAutoTable.finalY + 12;
+  });
+
+  const pdfBlob = doc.output('blob');
+  downloadOrShareBlob(pdfBlob, `nuvora-estado-cartera-${todayISO()}.pdf`, 'application/pdf');
+}
+
 // ---------- Balance ----------
 // ---------- Cartera (independiente) ----------
 function renderCartera(){
-  const pendientes = ventasConSaldoPendiente().sort((a,b)=> diasDeuda(b) - diasDeuda(a));
+  const pendientes = ventasConSaldoPendiente();
   const totalPendiente = pendientes.reduce((s,v)=>s+saldoPendiente(v),0);
   const vencidas = pendientes.filter(v=>diasDeuda(v)>30);
   const totalVencido = vencidas.reduce((s,v)=>s+saldoPendiente(v),0);
 
-  let rows = pendientes.map(v=>{
-    const saldo = saldoPendiente(v);
-    const dias = diasDeuda(v);
-    return `<tr class="${dias>30?'row-alert':''}">
-      <td>${v.cliente}<br><span style="font-size:10.5px;color:var(--ink-soft)">Venta ${v.fecha} · ${dias>30?'⚠ ':''}${dias}d</span></td>
-      <td class="num">${fmtMoney(v.total)}</td>
-      <td class="num">${fmtMoney(saldo)}</td>
+  // Agrupar por cliente
+  const porCliente = {};
+  pendientes.forEach(v=>{
+    if(!porCliente[v.cliente]) porCliente[v.cliente] = [];
+    porCliente[v.cliente].push(v);
+  });
+  const clientes = Object.keys(porCliente).map(nombre=>{
+    const ventasCliente = porCliente[nombre].sort((a,b)=>a.fecha.localeCompare(b.fecha)); // más antigua primero
+    const saldoTotal = ventasCliente.reduce((s,v)=>s+saldoPendiente(v),0);
+    const masAntigua = ventasCliente[0];
+    const diasMasAntigua = diasDeuda(masAntigua);
+    return {nombre, ventasCliente, saldoTotal, diasMasAntigua};
+  }).sort((a,b)=> b.diasMasAntigua - a.diasMasAntigua);
+
+  let rows = clientes.map(c=>{
+    return `<tr class="${c.diasMasAntigua>30?'row-alert':''}">
+      <td>${c.nombre}<br><span style="font-size:10.5px;color:var(--ink-soft)">Deuda más antigua: ${c.diasMasAntigua>30?'⚠ ':''}${c.diasMasAntigua}d (${c.ventasCliente.length} pedido${c.ventasCliente.length>1?'s':''})</span></td>
+      <td class="num">${fmtMoney(c.saldoTotal)}</td>
       <td>
         <div style="display:flex; gap:6px;">
-          <input type="number" step="any" placeholder="Monto" id="abono-monto-${v.id}" style="width:80px; font-size:12px; padding:6px; border:1px solid var(--line); border-radius:4px;">
-          <button class="add-btn" data-abonar="${v.id}" style="padding:6px 10px; font-size:11px; margin-top:0;">Abonar</button>
+          <input type="number" step="any" placeholder="Monto" id="abono-cliente-${c.nombre.replace(/[^a-zA-Z0-9]/g,'')}" style="width:80px; font-size:12px; padding:6px; border:1px solid var(--line); border-radius:4px;">
+          <button class="add-btn" data-abonar-cliente="${c.nombre}" style="padding:6px 10px; font-size:11px; margin-top:0;">Abonar</button>
         </div>
       </td>
     </tr>`;
   }).join('');
-  if(!rows) rows = `<tr><td colspan="4" class="empty">No hay clientes debiendo — cartera al día 🎉</td></tr>`;
+  if(!rows) rows = `<tr><td colspan="3" class="empty">No hay clientes debiendo — cartera al día 🎉</td></tr>`;
 
   return `<div class="hero-card" style="background:${totalVencido>0 ? 'var(--red)' : 'var(--blue)'};">
     <div class="label">Cartera total pendiente</div>
@@ -1489,9 +1575,18 @@ function renderCartera(){
 
   <div class="card">
     <div class="card-title">Cuentas por Cobrar</div>
-    <div class="card-desc">Cada venta a crédito pendiente. Escribe el monto que te pagó y toca "Abonar" — se descuenta solo, puedes abonar de a poquitos.</div>
-    <table><thead><tr><th>Cliente</th><th>Total venta</th><th>Debe</th><th>Abonar</th></tr></thead>
+    <div class="card-desc">Un total por cliente (suma de todos sus pedidos a crédito pendientes). El abono siempre descuenta primero del pedido más antiguo.</div>
+    <table><thead><tr><th>Cliente</th><th>Debe en total</th><th>Abonar</th></tr></thead>
     <tbody>${rows}</tbody></table>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Estado de Cartera</div>
+    <div class="card-desc">Descarga el detalle completo: cada pedido y cada abono, por cliente.</div>
+    <div style="padding:0 16px 16px; display:flex; gap:10px;">
+      <button class="export-btn" id="cartera-excel" style="flex:1; text-align:center;">⬇ Descargar Excel</button>
+      <button class="export-btn" id="cartera-pdf" style="flex:1; text-align:center;">⬇ Descargar PDF</button>
+    </div>
   </div>`;
 }
 
@@ -2295,23 +2390,33 @@ function attachHandlers(){
     catch(e){ alert('No se pudo registrar el movimiento: ' + e.message); }
   };
 
-  document.querySelectorAll('[data-abonar]').forEach(btn=>{
+  document.querySelectorAll('[data-abonar-cliente]').forEach(btn=>{
     btn.onclick = async ()=>{
-      const ventaId = btn.getAttribute('data-abonar');
-      const input = document.getElementById('abono-monto-' + ventaId);
+      const cliente = btn.getAttribute('data-abonar-cliente');
+      const inputId = 'abono-cliente-' + cliente.replace(/[^a-zA-Z0-9]/g,'');
+      const input = document.getElementById(inputId);
       const monto = Number(input.value);
       if(!monto || monto<=0) return;
-      const venta = state.ventas.find(v=>v.id===ventaId);
-      if(!venta) return;
       try{
-        await db.collection('abonos').add({ventaId, cliente:venta.cliente, fecha:todayISO(), monto});
-        if(saldoPendiente(venta) - monto <= 0){
-          await db.collection('ventas').doc(ventaId).update({pagado:true});
+        const pendientes = ventasConSaldoPendiente().filter(v=>v.cliente===cliente).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+        let restante = monto;
+        for(const venta of pendientes){
+          if(restante<=0) break;
+          const saldo = saldoPendiente(venta);
+          const aplicar = Math.min(restante, saldo);
+          await db.collection('abonos').add({ventaId:venta.id, cliente, fecha:todayISO(), monto:aplicar});
+          if(saldo - aplicar <= 0){ await db.collection('ventas').doc(venta.id).update({pagado:true}); }
+          restante -= aplicar;
         }
-        await db.collection('cuadreCaja').add({fecha:todayISO(), tipo:'Ingreso', concepto:`Abono de ${venta.cliente}`, monto});
+        await db.collection('cuadreCaja').add({fecha:todayISO(), tipo:'Ingreso', concepto:`Abono de ${cliente}`, monto});
       }catch(e){ alert('No se pudo registrar el abono: ' + e.message); }
     };
   });
+
+  const carteraExcel = document.getElementById('cartera-excel');
+  if(carteraExcel) carteraExcel.onclick = ()=>{ try{ exportCarteraExcel(); }catch(e){ alert('No se pudo exportar: ' + e.message); } };
+  const carteraPdf = document.getElementById('cartera-pdf');
+  if(carteraPdf) carteraPdf.onclick = ()=>{ try{ exportCarteraPDF(); }catch(e){ alert('No se pudo exportar: ' + e.message); } };
 
   const plAplicar = document.getElementById('pl-aplicar');
   if(plAplicar) plAplicar.onclick = ()=>{
