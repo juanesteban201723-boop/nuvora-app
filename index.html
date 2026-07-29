@@ -320,6 +320,29 @@ function exportToExcel(filename, sheetName, rows){
   }
 }
 
+function exportToPDF(filename, titulo, rows){
+  if(!rows || rows.length===0){ alert('No hay datos para exportar todavía.'); return; }
+  try{
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', 14, 8, 20, 20); }catch(e){}
+    doc.setFontSize(16); doc.text(`Nuvora — ${titulo}`, 38, 16);
+    doc.setFontSize(10); doc.text(`Al ${todayISO()}`, 38, 23);
+    const columnas = Object.keys(rows[0]);
+    const body = rows.map(r=> columnas.map(c=> (typeof r[c]==='number') ? fmt(r[c]) : (r[c]==null?'':String(r[c]))));
+    doc.autoTable({
+      startY: 32,
+      head:[columnas],
+      body,
+      theme:'striped', headStyles:{fillColor:[31,78,121]}, styles:{fontSize:8}
+    });
+    const pdfBlob = doc.output('blob');
+    downloadOrShareBlob(pdfBlob, `${filename}-${todayISO()}.pdf`, 'application/pdf');
+  }catch(e){
+    alert('No se pudo exportar: ' + e.message);
+  }
+}
+
 const ALL_TABS = [
   {id:'dashboard', label:'Dashboard'},
   {id:'materiales', label:'Materiales'},
@@ -919,7 +942,7 @@ function renderMateriales(){
       <button class="add-btn" id="m-add">+ Agregar material</button>
     </div>` : '';
 
-  return `<div class="panel-toolbar"><button class="export-btn" id="export-materiales">⬇ Exportar a Excel</button></div>
+  return `<div class="panel-toolbar"><button class="export-btn" id="export-materiales">⬇ Excel</button> <button class="export-btn" id="export-materiales-pdf">⬇ PDF</button></div>
   <div class="hero-card"><div class="label">Valor total del inventario</div><div class="amount">${fmtMoney(valorInventarioTotal())}</div></div>
   ${costoCard}
   ${chartCard}
@@ -1043,7 +1066,7 @@ function renderInventario(){
       + `</tbody></table></div>`;
   }
 
-  const toolbar = myRole==='admin' ? `<div class="panel-toolbar"><button class="export-btn" id="export-entradas">⬇ Exportar a Excel</button></div>` : '';
+  const toolbar = myRole==='admin' ? `<div class="panel-toolbar"><button class="export-btn" id="export-entradas">⬇ Excel</button> <button class="export-btn" id="export-entradas-pdf">⬇ PDF</button></div>` : '';
 
   const formHtml = canEdit ? `
     <div class="form-grid">
@@ -1098,7 +1121,7 @@ function renderProduccion(){
       ${limitante ? `<div class="limit">Limitado por: <strong>${limitante}</strong></div>` : ''}
     </div>`;
   } else {
-    contexto = `<div class="panel-toolbar"><button class="export-btn" id="export-produccion">⬇ Exportar a Excel</button></div>`;
+    contexto = `<div class="panel-toolbar"><button class="export-btn" id="export-produccion">⬇ Excel</button> <button class="export-btn" id="export-produccion-pdf">⬇ PDF</button></div>`;
   }
 
   const formHtml = canEdit ? `
@@ -1288,7 +1311,7 @@ function renderVentas(){
     </div>
   </div>` : '';
 
-  const toolbar = canEdit ? `<div class="panel-toolbar"><button class="export-btn" id="export-ventas">⬇ Exportar a Excel</button></div>` : '';
+  const toolbar = canEdit ? `<div class="panel-toolbar"><button class="export-btn" id="export-ventas">⬇ Excel</button> <button class="export-btn" id="export-ventas-pdf">⬇ PDF</button></div>` : '';
 
   return `${toolbar}
   <div class="hero-card">
@@ -1330,7 +1353,7 @@ function renderClientes(){
       <button class="add-btn" id="c-add">+ Agregar cliente</button>
     </div>` : '';
 
-  const toolbar = canEdit ? `<div class="panel-toolbar"><button class="export-btn" id="export-clientes">⬇ Exportar a Excel</button></div>` : '';
+  const toolbar = canEdit ? `<div class="panel-toolbar"><button class="export-btn" id="export-clientes">⬇ Excel</button> <button class="export-btn" id="export-clientes-pdf">⬇ PDF</button></div>` : '';
 
   return `${toolbar}
   <div class="card">
@@ -1564,6 +1587,87 @@ function exportCarteraPDF(soloCliente){
   downloadOrShareBlob(pdfBlob, nombreArchivo, 'application/pdf');
 }
 
+function exportProveedoresExcel(soloProveedor){
+  const pendientes = comprasConSaldoPendiente().filter(e=> !soloProveedor || (e.proveedor||'(sin nombre)')===soloProveedor);
+  const porProveedor = {};
+  pendientes.forEach(e=>{ const key = e.proveedor||'(sin nombre)'; if(!porProveedor[key]) porProveedor[key]=[]; porProveedor[key].push(e); });
+  const nombres = Object.keys(porProveedor).sort();
+
+  const wb = XLSX.utils.book_new();
+
+  const resumen = nombres.map(nombre=>{
+    const es = porProveedor[nombre];
+    return {Proveedor:nombre, 'Total Adeudado': es.reduce((s,e)=>s+saldoPendienteCompra(e),0), 'N° Compras Pendientes': es.length};
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen.length?resumen:[{Proveedor:'Sin deudas a proveedores'}]), 'Resumen por Proveedor');
+
+  const detalle = [];
+  nombres.forEach(nombre=>{
+    porProveedor[nombre].sort((a,b)=>a.fecha.localeCompare(b.fecha)).forEach(e=>{
+      detalle.push({Proveedor:nombre, Tipo:'Compra', Fecha:e.fecha, Material:e.material, Monto:e.costoTotal, 'Saldo Pendiente':saldoPendienteCompra(e)});
+      state.pagosProveedor.filter(p=>p.entradaId===e.id).sort((a,b)=>a.fecha.localeCompare(b.fecha)).forEach(p=>{
+        detalle.push({Proveedor:nombre, Tipo:'Pago', Fecha:p.fecha, Material:'', Monto:-p.monto, 'Saldo Pendiente':''});
+      });
+    });
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle.length?detalle:[{Proveedor:'Sin movimientos'}]), 'Detalle Compras y Pagos');
+
+  const wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+  const blob = new Blob([wbout], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const nombreArchivo = soloProveedor ? `nuvora-estado-proveedor-${soloProveedor.replace(/[^a-zA-Z0-9]/g,'-')}-${todayISO()}.xlsx` : `nuvora-estado-proveedores-${todayISO()}.xlsx`;
+  downloadOrShareBlob(blob, nombreArchivo, blob.type);
+}
+
+function exportProveedoresPDF(soloProveedor){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const pendientes = comprasConSaldoPendiente().filter(e=> !soloProveedor || (e.proveedor||'(sin nombre)')===soloProveedor);
+  const porProveedor = {};
+  pendientes.forEach(e=>{ const key = e.proveedor||'(sin nombre)'; if(!porProveedor[key]) porProveedor[key]=[]; porProveedor[key].push(e); });
+  const nombres = Object.keys(porProveedor).sort();
+  const totalGeneral = pendientes.reduce((s,e)=>s+saldoPendienteCompra(e),0);
+
+  try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', 14, 8, 20, 20); }catch(e){}
+  doc.setFontSize(16); doc.text(soloProveedor ? 'Nuvora — Estado de Cuenta (Proveedor)' : 'Nuvora — Estado de Proveedores', 38, 16);
+  doc.setFontSize(10);
+  doc.text(soloProveedor ? `Proveedor: ${soloProveedor}  ·  Al ${todayISO()}  ·  Debemos: ${fmtMoney(totalGeneral)}` : `Al ${todayISO()}  ·  Total adeudado: ${fmtMoney(totalGeneral)}`, 38, 23);
+
+  let startY = 32;
+  if(nombres.length===0){
+    doc.setFontSize(11); doc.text('No hay deudas con proveedores — todo al día.', 14, startY);
+  }
+  nombres.forEach(nombre=>{
+    const es = porProveedor[nombre].sort((a,b)=>a.fecha.localeCompare(b.fecha));
+    const totalProveedor = es.reduce((s,e)=>s+saldoPendienteCompra(e),0);
+    if(startY > 260){ doc.addPage(); startY = 20; }
+    if(!soloProveedor){
+      doc.setFontSize(12); doc.setTextColor(31,78,121);
+      doc.text(`${nombre}  —  Debemos: ${fmtMoney(totalProveedor)}`, 14, startY);
+      doc.setTextColor(0,0,0);
+      startY += 4;
+    }
+
+    const body = [];
+    es.forEach(e=>{
+      body.push([e.fecha, 'Compra', e.material, fmtMoney(e.costoTotal), fmtMoney(saldoPendienteCompra(e))]);
+      state.pagosProveedor.filter(p=>p.entradaId===e.id).sort((a,b)=>a.fecha.localeCompare(b.fecha)).forEach(p=>{
+        body.push([p.fecha, 'Pago', '', `-${fmtMoney(p.monto)}`, '']);
+      });
+    });
+    doc.autoTable({
+      startY: startY,
+      head:[['Fecha','Tipo','Material','Monto','Saldo compra']],
+      body,
+      theme:'striped', headStyles:{fillColor:[31,78,121]}, styles:{fontSize:9}
+    });
+    startY = doc.lastAutoTable.finalY + 12;
+  });
+
+  const pdfBlob = doc.output('blob');
+  const nombreArchivo = soloProveedor ? `nuvora-estado-proveedor-${soloProveedor.replace(/[^a-zA-Z0-9]/g,'-')}-${todayISO()}.pdf` : `nuvora-estado-proveedores-${todayISO()}.pdf`;
+  downloadOrShareBlob(pdfBlob, nombreArchivo, 'application/pdf');
+}
+
 // ---------- Balance ----------
 // ---------- Cartera (independiente) ----------
 function renderCartera(){
@@ -1785,22 +1889,33 @@ function renderAdministrativo(){
 
   const catOptions = CATEGORIAS_GASTO.map(c=>`<option value="${c}">${c}</option>`).join('');
 
-  // --- Proveedores (compras fiadas) ---
-  const comprasPendientes = comprasConSaldoPendiente().sort((a,b)=> saldoPendienteCompra(b) - saldoPendienteCompra(a));
-  let proveedorRows = comprasPendientes.map(e=>{
-    const saldo = saldoPendienteCompra(e);
-    return `<tr data-search-row="proveedores" data-search-text="${(e.proveedor||'').toLowerCase()} ${e.material.toLowerCase()}">
-      <td>${e.proveedor||'(sin nombre)'}<br><span style="font-size:10.5px;color:var(--ink-soft)">${e.material} · ${e.fecha}</span></td>
-      <td class="num">${fmtMoney(saldo)}</td>
+  // --- Proveedores (compras fiadas), agrupado por proveedor ---
+  const comprasPendientes = comprasConSaldoPendiente();
+  const porProveedor = {};
+  comprasPendientes.forEach(e=>{
+    const key = e.proveedor || '(sin nombre)';
+    if(!porProveedor[key]) porProveedor[key] = [];
+    porProveedor[key].push(e);
+  });
+  const proveedoresList = Object.keys(porProveedor).map(nombre=>{
+    const compras = porProveedor[nombre].sort((a,b)=>a.fecha.localeCompare(b.fecha)); // más antigua primero
+    const saldoTotal = compras.reduce((s,e)=>s+saldoPendienteCompra(e),0);
+    return {nombre, compras, saldoTotal};
+  }).sort((a,b)=> b.saldoTotal - a.saldoTotal);
+
+  let proveedorRows = proveedoresList.map(p=>{
+    return `<tr data-search-row="proveedores" data-search-text="${p.nombre.toLowerCase()}">
+      <td>${p.nombre}<br><span style="font-size:10.5px;color:var(--ink-soft)">${p.compras.length} compra${p.compras.length>1?'s':''} pendiente${p.compras.length>1?'s':''}</span></td>
+      <td class="num">${fmtMoney(p.saldoTotal)}</td>
       <td>
-        <div style="display:flex; gap:6px;">
-          <input type="number" step="any" placeholder="Monto" id="pagoprov-monto-${e.id}" style="width:80px; font-size:12px; padding:6px; border:1px solid var(--line); border-radius:4px;">
-          <button class="add-btn" data-pagarprov="${e.id}" style="padding:6px 10px; font-size:11px; margin-top:0;">Pagar</button>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <input type="number" step="any" placeholder="Monto" id="pagoprov-monto-${p.nombre.replace(/[^a-zA-Z0-9]/g,'')}" style="width:70px; font-size:12px; padding:6px; border:1px solid var(--line); border-radius:4px;">
+          <button class="add-btn" data-pagarprov-nombre="${p.nombre}" style="padding:6px 10px; font-size:11px; margin-top:0;">Pagar</button>
+          <button class="del-btn" data-proveedor-pdf="${p.nombre}" title="Descargar estado de ${p.nombre}" style="color:var(--blue);">📄</button>
         </div>
       </td>
     </tr>`;
   }).join('');
-  if(!proveedorRows) proveedorRows = `<tr><td colspan="3" class="empty">No le debes a ningún proveedor 🎉</td></tr>`;
 
   // --- Capital de socios ---
   let capitalRows = state.capital.slice().sort((a,b)=> b.fecha.localeCompare(a.fecha)).map(c=>{
@@ -1881,9 +1996,18 @@ function renderAdministrativo(){
 
   <div class="card">
     <div class="card-title">Debemos a Proveedores (compras fiadas)</div>
-    <div class="card-desc">Busca un proveedor o material para ver cuánto le debes y pagarle.</div>
+    <div class="card-desc">Un total por proveedor. El pago descuenta primero de la compra más antigua. Toca 📄 para descargar el estado de solo ese proveedor.</div>
     <div style="padding:0 16px 12px;"><input type="text" placeholder="🔍 Buscar proveedor..." data-search-input="proveedores" style="width:100%; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);"></div>
     <table><thead><tr><th>Proveedor</th><th>Debemos</th><th>Pagar</th></tr></thead><tbody>${proveedorRows}<tr data-search-empty="proveedores"><td colspan="3" class="empty">Escribe arriba para buscar</td></tr></tbody></table>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Estado de Proveedores (todos)</div>
+    <div class="card-desc">Todos los proveedores agrupados, con sus compras fiadas y pagos.</div>
+    <div style="padding:0 16px 16px; display:flex; gap:10px;">
+      <button class="export-btn" id="proveedores-excel" style="flex:1; text-align:center;">⬇ Descargar Excel</button>
+      <button class="export-btn" id="proveedores-pdf" style="flex:1; text-align:center;">⬇ Descargar PDF</button>
+    </div>
   </div>
 
   <div class="card">
@@ -1935,7 +2059,7 @@ function renderFinanzas(){
   let clienteRows = clientesOrdenados.map(([nombre,d])=>`<tr><td>${nombre}</td><td class="num">${fmt(d.cm)} cm</td><td class="num">${fmtMoney(d.total)}</td><td class="num">${d.cartera>0?fmtMoney(d.cartera):'—'}</td></tr>`).join('');
   if(!clienteRows) clienteRows = `<tr><td colspan="4" style="text-align:center;color:var(--ink-soft);padding:16px;">Sin ventas registradas aún</td></tr>`;
 
-  const toolbar = myRole==='admin' ? `<div class="panel-toolbar"><button class="export-btn" id="export-balance">⬇ Exportar a Excel</button></div>` : '';
+  const toolbar = myRole==='admin' ? `<div class="panel-toolbar"><button class="export-btn" id="export-balance">⬇ Excel</button> <button class="export-btn" id="export-balance-pdf">⬇ PDF</button></div>` : '';
 
   return `${toolbar}
 
@@ -2340,42 +2464,49 @@ function attachHandlers(){
     };
   });
 
-  const expMateriales = document.getElementById('export-materiales');
-  if(expMateriales) expMateriales.onclick = ()=>{
-    const data = state.materiales.map(m=>({
+  function dataMateriales(){
+    return state.materiales.map(m=>({
       Material: m.nombre, Tipo: m.tipo, Unidad: m.unidad,
       'Stock Actual': stockMaterial(m.nombre), 'Stock Mínimo': m.stockMinimo,
       'Costo Promedio': costoPromedio(m.nombre), 'Valor en Inventario': valorInventario(m.nombre),
       Estado: stockMaterial(m.nombre) < Number(m.stockMinimo) ? 'BAJO' : 'OK'
     }));
-    exportToExcel('nuvora-materiales', 'Materiales', data);
-  };
+  }
+  const expMateriales = document.getElementById('export-materiales');
+  if(expMateriales) expMateriales.onclick = ()=> exportToExcel('nuvora-materiales', 'Materiales', dataMateriales());
+  const expMaterialesPdf = document.getElementById('export-materiales-pdf');
+  if(expMaterialesPdf) expMaterialesPdf.onclick = ()=> exportToPDF('nuvora-materiales', 'Materiales', dataMateriales());
 
+  function dataEntradas(){
+    return state.entradas.map(e=>({ Fecha: e.fecha, Material: e.material, Cantidad: e.cantidad, Unidad: e.unidad, 'Costo Unitario': e.costoUnitario||0, 'Costo Total': e.costoTotal||0 }));
+  }
   const expEntradas = document.getElementById('export-entradas');
-  if(expEntradas) expEntradas.onclick = ()=>{
-    const data = state.entradas.map(e=>({ Fecha: e.fecha, Material: e.material, Cantidad: e.cantidad, Unidad: e.unidad, 'Costo Unitario': e.costoUnitario||0, 'Costo Total': e.costoTotal||0 }));
-    exportToExcel('nuvora-entradas-inventario', 'Entradas', data);
-  };
+  if(expEntradas) expEntradas.onclick = ()=> exportToExcel('nuvora-entradas-inventario', 'Entradas', dataEntradas());
+  const expEntradasPdf = document.getElementById('export-entradas-pdf');
+  if(expEntradasPdf) expEntradasPdf.onclick = ()=> exportToPDF('nuvora-entradas-inventario', 'Entradas de Inventario', dataEntradas());
 
+  function dataProduccion(){
+    return state.produccion.map(p=>({ Fecha: p.fecha, Bloques: p.bloques, 'Cm por Bloque': p.cmPorBloque, 'Cm Total': p.cmTotal }));
+  }
   const expProduccion = document.getElementById('export-produccion');
-  if(expProduccion) expProduccion.onclick = ()=>{
-    const data = state.produccion.map(p=>({ Fecha: p.fecha, Bloques: p.bloques, 'Cm por Bloque': p.cmPorBloque, 'Cm Total': p.cmTotal }));
-    exportToExcel('nuvora-produccion', 'Producción', data);
-  };
+  if(expProduccion) expProduccion.onclick = ()=> exportToExcel('nuvora-produccion', 'Producción', dataProduccion());
+  const expProduccionPdf = document.getElementById('export-produccion-pdf');
+  if(expProduccionPdf) expProduccionPdf.onclick = ()=> exportToPDF('nuvora-produccion', 'Producción', dataProduccion());
 
-  const expVentas = document.getElementById('export-ventas');
-  if(expVentas) expVentas.onclick = ()=>{
-    const data = state.ventas.map(v=>({
+  function dataVentas(){
+    return state.ventas.map(v=>({
       Fecha: v.fecha, Cliente: v.cliente, 'Cm Vendidos': v.cmVendidos, 'Precio/cm': v.precioPorCm,
       Total: v.total, 'Forma de Pago': v.formaPago,
       Estado: v.formaPago==='efectivo' ? 'Efectivo' : (v.pagado ? 'Pagado' : `Pendiente (${diasDeuda(v)}d)`)
     }));
-    exportToExcel('nuvora-ventas', 'Ventas', data);
-  };
+  }
+  const expVentas = document.getElementById('export-ventas');
+  if(expVentas) expVentas.onclick = ()=> exportToExcel('nuvora-ventas', 'Ventas', dataVentas());
+  const expVentasPdf = document.getElementById('export-ventas-pdf');
+  if(expVentasPdf) expVentasPdf.onclick = ()=> exportToPDF('nuvora-ventas', 'Ventas', dataVentas());
 
-  const expClientes = document.getElementById('export-clientes');
-  if(expClientes) expClientes.onclick = ()=>{
-    const data = state.clientes.map(c=>{
+  function dataClientes(){
+    return state.clientes.map(c=>{
       const ventasCredito = state.ventas.filter(v=>v.cliente===c.nombre && v.formaPago==='credito' && !v.pagado);
       const totalDeuda = ventasCredito.reduce((s,v)=>s+Number(v.total||0),0);
       const maxDias = ventasCredito.reduce((max,v)=>Math.max(max, diasDeuda(v)), 0);
@@ -2385,11 +2516,13 @@ function attachHandlers(){
         'Cartera Pendiente': totalDeuda, 'Días de Mora': maxDias
       };
     });
-    exportToExcel('nuvora-clientes', 'Clientes', data);
-  };
+  }
+  const expClientes = document.getElementById('export-clientes');
+  if(expClientes) expClientes.onclick = ()=> exportToExcel('nuvora-clientes', 'Clientes', dataClientes());
+  const expClientesPdf = document.getElementById('export-clientes-pdf');
+  if(expClientesPdf) expClientesPdf.onclick = ()=> exportToPDF('nuvora-clientes', 'Clientes', dataClientes());
 
-  const expBalance = document.getElementById('export-balance');
-  if(expBalance) expBalance.onclick = ()=>{
+  function dataBalance(){
     const porCliente = {};
     state.ventas.forEach(v=>{
       if(!porCliente[v.cliente]) porCliente[v.cliente] = {cm:0, total:0, cartera:0};
@@ -2397,9 +2530,12 @@ function attachHandlers(){
       porCliente[v.cliente].total += Number(v.total||0);
       porCliente[v.cliente].cartera += saldoPendiente(v);
     });
-    const data = Object.entries(porCliente).map(([nombre,d])=>({Cliente:nombre, 'Cm Comprados':d.cm, 'Total Comprado':d.total, 'Cartera Pendiente':d.cartera}));
-    exportToExcel('nuvora-finanzas', 'Ventas por Cliente', data);
-  };
+    return Object.entries(porCliente).map(([nombre,d])=>({Cliente:nombre, 'Cm Comprados':d.cm, 'Total Comprado':d.total, 'Cartera Pendiente':d.cartera}));
+  }
+  const expBalance = document.getElementById('export-balance');
+  if(expBalance) expBalance.onclick = ()=> exportToExcel('nuvora-finanzas', 'Ventas por Cliente', dataBalance());
+  const expBalancePdf = document.getElementById('export-balance-pdf');
+  if(expBalancePdf) expBalancePdf.onclick = ()=> exportToPDF('nuvora-finanzas', 'Ventas por Cliente', dataBalance());
 
   const gAdd = document.getElementById('g-add');
   if(gAdd) gAdd.onclick = async ()=>{
@@ -2472,19 +2608,37 @@ function attachHandlers(){
     render();
   };
 
-  document.querySelectorAll('[data-pagarprov]').forEach(btn=>{
+  document.querySelectorAll('[data-pagarprov-nombre]').forEach(btn=>{
     btn.onclick = async ()=>{
-      const entradaId = btn.getAttribute('data-pagarprov');
-      const input = document.getElementById('pagoprov-monto-' + entradaId);
+      const proveedor = btn.getAttribute('data-pagarprov-nombre');
+      const inputId = 'pagoprov-monto-' + proveedor.replace(/[^a-zA-Z0-9]/g,'');
+      const input = document.getElementById(inputId);
       const monto = Number(input.value);
       if(!monto || monto<=0) return;
-      const entrada = state.entradas.find(e=>e.id===entradaId);
-      if(!entrada) return;
       try{
-        await db.collection('pagosProveedor').add({entradaId, proveedor:entrada.proveedor||'', fecha:todayISO(), monto});
-        await db.collection('cuadreCaja').add({fecha:todayISO(), tipo:'Salida', concepto:`Pago a proveedor: ${entrada.proveedor||entrada.material}`, monto});
+        const pendientes = comprasConSaldoPendiente().filter(e=>(e.proveedor||'(sin nombre)')===proveedor).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+        let restante = monto;
+        for(const entrada of pendientes){
+          if(restante<=0) break;
+          const saldo = saldoPendienteCompra(entrada);
+          const aplicar = Math.min(restante, saldo);
+          await db.collection('pagosProveedor').add({entradaId:entrada.id, proveedor, fecha:todayISO(), monto:aplicar});
+          restante -= aplicar;
+        }
+        await db.collection('cuadreCaja').add({fecha:todayISO(), tipo:'Salida', concepto:`Pago a proveedor: ${proveedor}`, monto});
       }
       catch(e){ alert('No se pudo registrar el pago: ' + e.message); }
+    };
+  });
+
+  const proveedoresExcel = document.getElementById('proveedores-excel');
+  if(proveedoresExcel) proveedoresExcel.onclick = ()=>{ try{ exportProveedoresExcel(); }catch(e){ alert('No se pudo exportar: ' + e.message); } };
+  const proveedoresPdf = document.getElementById('proveedores-pdf');
+  if(proveedoresPdf) proveedoresPdf.onclick = ()=>{ try{ exportProveedoresPDF(); }catch(e){ alert('No se pudo exportar: ' + e.message); } };
+  document.querySelectorAll('[data-proveedor-pdf]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const proveedor = btn.getAttribute('data-proveedor-pdf');
+      try{ exportProveedoresPDF(proveedor); }catch(e){ alert('No se pudo exportar: ' + e.message); }
     };
   });
 
