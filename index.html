@@ -255,8 +255,10 @@ let myPermisos = [];      // tab ids visible to an 'administrativo' user
 let state = {
   materiales: [],
   formula: [],
+  formulaParrillas: [],
   entradas: [],
   produccion: [],
+  produccionParrillas: [],
   usuarios: [],
   clientes: [],
   ventas: [],
@@ -267,7 +269,7 @@ let state = {
   pagosProveedor: [],
   cuadreCaja: [],
   ingresosVarios: [],
-  settings: { precioCm: 0, cmPorBloque: 100 }
+  settings: { precioCm: 0, cmPorBloque: 100, precioParrilla: 0 }
 };
 
 let activeTab = null;
@@ -277,6 +279,7 @@ let mesInforme = null;
 let fechaCuadre = null;
 let unsubscribers = [];
 let editandoFormulaId = null;
+let editandoFormulaParrillaId = null;
 let asistFlujo = null;    // 'ingreso' | 'salida'
 let asistConcepto = null;
 let asistMensaje = null;  // confirmation message shown after registering
@@ -343,12 +346,16 @@ function exportToPDF(filename, titulo, rows){
   }
 }
 
+const TALLAS_PARRILLA = ['1.00', '1.40', '1.60', '2.00'];
+
 const ALL_TABS = [
   {id:'dashboard', label:'Dashboard'},
   {id:'materiales', label:'Materiales'},
-  {id:'formula', label:'Fórmula'},
+  {id:'formula', label:'Fórmula Casata'},
+  {id:'formulaParrillas', label:'Fórmula Parrillas'},
   {id:'inventario', label:'Cargar Inventario'},
-  {id:'produccion', label:'Producción Diaria'},
+  {id:'produccion', label:'Producción Casata'},
+  {id:'produccionParrillas', label:'Producción Parrillas'},
   {id:'ventas', label:'Ventas'},
   {id:'clientes', label:'Clientes'},
   {id:'cartera', label:'Cartera'},
@@ -358,7 +365,7 @@ const ALL_TABS = [
 
 function getTabsForCurrentUser(){
   if(myRole==='admin') return [...ALL_TABS, {id:'usuarios', label:'Usuarios'}];
-  if(myRole==='produccion') return [{id:'produccion', label:'Producción Diaria'}];
+  if(myRole==='produccion') return [{id:'produccion', label:'Producción Casata'}, {id:'produccionParrillas', label:'Producción Parrillas'}];
   if(myRole==='inventario') return [{id:'inventario', label:'Cargar Inventario'}];
   if(myRole==='administrativo') return ALL_TABS.filter(t=>myPermisos.includes(t.id));
   return [];
@@ -495,6 +502,10 @@ function startListeners(){
     state.formula = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   }));
+  unsubscribers.push(db.collection('formulaParrillas').onSnapshot(snap=>{
+    state.formulaParrillas = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    render();
+  }));
   unsubscribers.push(db.collection('entradas').orderBy('fecha','desc').onSnapshot(snap=>{
     state.entradas = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
@@ -503,8 +514,12 @@ function startListeners(){
     state.produccion = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   }));
+  unsubscribers.push(db.collection('produccionParrillas').orderBy('fecha','desc').onSnapshot(snap=>{
+    state.produccionParrillas = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    render();
+  }));
   unsubscribers.push(db.collection('settings').doc('config').onSnapshot(doc=>{
-    if(doc.exists) state.settings = Object.assign({precioCm:0, cmPorBloque:100}, doc.data());
+    if(doc.exists) state.settings = Object.assign({precioCm:0, cmPorBloque:100, precioParrilla:0}, doc.data());
     render();
   }));
   unsubscribers.push(db.collection('clientes').onSnapshot(snap=>{
@@ -577,8 +592,35 @@ function produccionCasata(){
 
 function stockCasataTerminada(){
   const totalProducido = state.produccion.reduce((s,p)=>s+Number(p.cmTotal||0),0);
-  const totalVendido = state.ventas.reduce((s,v)=>s+Number(v.cmVendidos||0),0);
+  const totalVendido = state.ventas.filter(v=>v.producto!=='parrillas').reduce((s,v)=>s+Number(v.cmVendidos||0),0);
   return totalProducido - totalVendido;
+}
+
+function tallasParrilla(){
+  return [...new Set(state.formulaParrillas.map(f=>f.talla).filter(Boolean))].sort();
+}
+
+function produccionParrillasPosible(talla){
+  let min = null, limitante = null;
+  const filas = talla ? state.formulaParrillas.filter(r=>r.talla===talla) : state.formulaParrillas;
+  for(const r of filas){
+    const stock = stockMaterial(r.material);
+    const cantPorUnidad = Number(r.cantidadPorUnidad);
+    if(!cantPorUnidad) continue;
+    const unidades = stock / cantPorUnidad;
+    if(min===null || unidades < min){ min = unidades; limitante = r.material; }
+  }
+  return {unidades: min, limitante};
+}
+
+function stockParrillasTerminadas(talla){
+  const totalProducido = state.produccionParrillas.filter(p=> !talla || p.talla===talla).reduce((s,p)=>s+Number(p.unidades||0),0);
+  const totalVendido = state.ventas.filter(v=>v.producto==='parrillas' && (!talla || v.talla===talla)).reduce((s,v)=>s+Number(v.cmVendidos||0),0);
+  return totalProducido - totalVendido;
+}
+
+function costoPorUnidadParrilla(talla){
+  return state.formulaParrillas.filter(r=> !talla || r.talla===talla).reduce((s,r)=> s + costoPromedio(r.material) * (Number(r.cantidadPorUnidad)||0), 0);
 }
 
 function diasDeuda(venta){
@@ -790,6 +832,8 @@ function renderPanels(){
   if(activeTab==='formula') div.innerHTML = renderFormula();
   if(activeTab==='inventario') div.innerHTML = renderInventario();
   if(activeTab==='produccion') div.innerHTML = renderProduccion();
+  if(activeTab==='produccionParrillas') div.innerHTML = renderProduccionParrillas();
+  if(activeTab==='formulaParrillas') div.innerHTML = renderFormulaParrillas();
   if(activeTab==='ventas') div.innerHTML = renderVentas();
   if(activeTab==='clientes') div.innerHTML = renderClientes();
   if(activeTab==='cartera') div.innerHTML = renderCartera();
@@ -852,6 +896,16 @@ function renderDashboard(){
     <div class="amount">${cm===null?'—':fmt(cm)} cm</div>
     ${limitante ? `<div class="limit">Limitado por: <strong>${limitante}</strong></div>` : ''}
   </div>`;
+
+  const tallasConFormula = TALLAS_PARRILLA.filter(t=> state.formulaParrillas.some(f=>f.talla===t));
+  if(tallasConFormula.length>0){
+    html += `<div class="section-h">Parrillas — producibles hoy por talla</div>
+    <div class="balance-grid">${tallasConFormula.map(t=>{
+      const {unidades, limitante} = produccionParrillasPosible(t);
+      return `<div class="balance-card"><div class="label">Talla ${t}</div><div class="val">${unidades===null?'—':fmt(unidades)} un.</div>
+        <div style="font-size:10.5px;color:var(--ink-soft);margin-top:2px;">Limitado por: ${limitante||'—'}</div></div>`;
+    }).join('')}</div>`;
+  }
 
   if(myRole==='admin'){
     html += `<div class="price-row">
@@ -1037,6 +1091,107 @@ function renderFormula(){
   </div>`;
 }
 
+function renderFormulaParrillas(){
+  const canEdit = myRole==='admin';
+  const tallaOptions = TALLAS_PARRILLA.map(t=>`<option value="${t}">${t}</option>`).join('');
+  const materialOptions = state.materiales.map(m=>`<option value="${m.nombre}">${m.nombre} (${m.unidad||'kg'})</option>`).join('');
+
+  let formulaBloques = TALLAS_PARRILLA.map(talla=>{
+    const filas = state.formulaParrillas.filter(f=>f.talla===talla);
+    if(filas.length===0) return '';
+    let filaRows = filas.map(f=>{
+      const mat = state.materiales.find(m=>m.nombre===f.material);
+      const unidad = mat ? (mat.unidad||'kg') : '';
+      let filaEdicion = '';
+      if(editandoFormulaParrillaId===f.id){
+        filaEdicion = `<tr><td colspan="3" style="background:var(--paper);">
+          <div class="form-grid">
+            <div class="full"><label>Cantidad por unidad (${f.material}, talla ${talla})</label><input id="edit-fp-cant" type="number" step="any" value="${f.cantidadPorUnidad}"></div>
+            <button class="add-btn" data-guardar-formula-parrilla="${f.id}" style="grid-column:1/-1;">Guardar</button>
+            <button class="export-btn" data-cancelar-formula-parrilla style="grid-column:1/-1;">Cancelar</button>
+          </div>
+        </td></tr>`;
+      }
+      return `<tr>
+        <td>${f.material}</td>
+        <td class="num">${fmt(f.cantidadPorUnidad)} ${unidad}</td>
+        <td>${canEdit ? `<button class="del-btn" data-editar-formula-parrilla="${f.id}" title="Editar">✏️</button><button class="del-btn" data-del-col="formulaParrillas" data-id="${f.id}">✕</button>` : ''}</td>
+      </tr>${filaEdicion}`;
+    }).join('');
+    return `<div style="padding:10px 16px 0;"><strong style="font-size:12.5px;">Talla ${talla}</strong></div>
+      <table><thead><tr><th>Material</th><th>Cantidad/unidad</th><th></th></tr></thead><tbody>${filaRows}</tbody></table>`;
+  }).join('');
+  if(!formulaBloques) formulaBloques = `<div class="empty">Sin fórmula de parrillas aún — agrega una abajo.</div>`;
+
+  const formulaFormHtml = canEdit ? `
+    <div class="form-grid">
+      <div><label>Talla</label><select id="fp-talla">${tallaOptions}</select></div>
+      <div><label>Material</label>
+        <select id="fp-material">${materialOptions || '<option value="">Agrega materiales primero</option>'}</select>
+      </div>
+      <div class="full"><label>Cantidad por unidad de esa talla</label><input id="fp-cantidad" type="number" step="any"></div>
+      <button class="add-btn" id="fp-add">+ Agregar a la fórmula</button>
+    </div>` : '';
+
+  return `<div class="card">
+    <div class="card-title">Fórmula de Parrillas (por talla)</div>
+    <div class="card-desc">Cantidad de cada material necesaria para producir 1 unidad de esa talla.</div>
+    ${formulaBloques}
+    ${formulaFormHtml}
+  </div>`;
+}
+
+function renderProduccionParrillas(){
+  const canEdit = myRole==='admin' || myRole==='produccion';
+  const tallaOptions = TALLAS_PARRILLA.map(t=>`<option value="${t}">${t}</option>`).join('');
+
+  let resumenTallas = TALLAS_PARRILLA.map(talla=>{
+    const {unidades, limitante} = produccionParrillasPosible(talla);
+    const stockT = stockParrillasTerminadas(talla);
+    const tieneFormula = state.formulaParrillas.some(f=>f.talla===talla);
+    if(!tieneFormula) return '';
+    return `<div class="balance-card">
+      <div class="label">Talla ${talla} — producibles hoy</div>
+      <div class="val">${unidades===null?'—':fmt(unidades)} un.</div>
+      <div style="font-size:10.5px;color:var(--ink-soft);margin-top:2px;">Limitado por: ${limitante||'—'} · Stock terminado: ${fmt(stockT)} un.</div>
+    </div>`;
+  }).join('');
+  if(!resumenTallas) resumenTallas = `<div class="empty">Agrega la fórmula de al menos una talla en "Fórmula Parrillas" para ver cuánto puedes producir.</div>`;
+
+  let prodRows = state.produccionParrillas.slice(0,30).map(p=>{
+    return `<tr>
+      <td>${p.fecha}</td>
+      <td>${p.talla||'—'}</td>
+      <td class="num">${fmt(p.unidades)} un.</td>
+      <td>${myRole==='admin' ? `<button class="del-btn" data-del-col="produccionParrillas" data-id="${p.id}">✕</button>` : ''}</td>
+    </tr>`;
+  }).join('');
+  if(!prodRows) prodRows = `<tr><td colspan="4" class="empty">Sin producción de parrillas registrada aún</td></tr>`;
+
+  const totalUnidadesProducidas = state.produccionParrillas.reduce((s,p)=>s+Number(p.unidades||0),0);
+
+  const prodFormHtml = canEdit ? `
+    <div class="form-grid">
+      <div><label>Fecha</label><input id="pp-fecha" type="date" value="${todayISO()}"></div>
+      <div><label>Talla</label><select id="pp-talla">${tallaOptions}</select></div>
+      <div class="full"><label>Unidades producidas</label><input id="pp-unidades" type="number" step="any"></div>
+      <button class="add-btn" id="pp-add">+ Registrar producción</button>
+    </div>` : '';
+
+  return `<div class="balance-grid">${resumenTallas}</div>
+
+  <div class="card">
+    <div class="card-title">Producción de Parrillas</div>
+    <div class="card-desc">Reporta cuántas unidades hiciste de cada talla. El consumo de materiales se descuenta solo, del mismo inventario compartido.</div>
+    <table><thead><tr><th>Fecha</th><th>Talla</th><th>Unidades</th><th></th></tr></thead>
+    <tbody>${prodRows}</tbody></table>
+    ${prodFormHtml}
+  </div>
+  <div class="card"><div style="padding:14px 16px; font-size:13px; color:var(--ink-soft);">
+    Total histórico producido (todas las tallas): <strong style="color:var(--ink);">${fmt(totalUnidadesProducidas)}</strong> unidades
+  </div></div>`;
+}
+
 function renderInventario(){
   const canEdit = myRole==='admin' || myRole==='inventario';
   let rows = state.entradas.slice(0,30).map(e=>{
@@ -1210,8 +1365,8 @@ function generarRemisionPDF(venta){
     margin: {left: margin, right: margin},
     head: [['CANTIDAD','DETALLE','VALOR UNITARIO','VALOR']],
     body: [[
-      `${fmt(venta.cmVendidos)} cm`,
-      'Casata',
+      `${fmt(venta.cmVendidos)} ${venta.producto==='parrillas' ? 'un.' : 'cm'}`,
+      venta.producto==='parrillas' ? `Parrillas Resortadas${venta.talla ? ' talla '+venta.talla : ''}` : 'Casata',
       fmtMoney(venta.precioPorCm),
       fmtMoney(venta.total)
     ]],
@@ -1254,12 +1409,16 @@ function generarRemisionPDF(venta){
   const blob = doc.output('blob');
   downloadOrShareBlob(blob, `remision-${numero}-${venta.cliente.replace(/\s+/g,'-')}.pdf`, 'application/pdf');
 }
+let ventaProducto = 'casata';
+
 function renderVentas(){
   const canEdit = myRole==='admin';
   const stockTerminado = stockCasataTerminada();
+  const stockParrillas = stockParrillasTerminadas();
 
   // --- Historial de ventas ---
   let ventaRows = state.ventas.map(v=>{
+    const esParrilla = v.producto==='parrillas';
     let estado;
     if(v.formaPago==='efectivo'){
       estado = `<span class="tag-ok">Efectivo</span>`;
@@ -1278,8 +1437,8 @@ function renderVentas(){
     const remisionBtn = `<button class="del-btn" data-remision="${v.id}" title="Generar remisión" style="color:var(--blue);">🖨</button>`;
     const dias = diasDeuda(v);
     return `<tr class="${(v.formaPago==='credito' && !v.pagado && dias>30) ? 'row-alert' : ''}">
-      <td>${v.fecha}<br><span style="font-size:10.5px;color:var(--ink-soft)">${v.cliente}</span></td>
-      <td class="num">${fmt(v.cmVendidos)} cm</td>
+      <td>${v.fecha}<br><span style="font-size:10.5px;color:var(--ink-soft)">${v.cliente}${esParrilla?` · 🔩 Parrillas ${v.talla||''}`:''}</span></td>
+      <td class="num">${fmt(v.cmVendidos)} ${esParrilla?'un.':'cm'}</td>
       <td class="num">${fmtMoney(v.total)}</td>
       <td>${estado}</td>
       <td>${remisionBtn}${marcarBtn}${deshacerBtn}${canEdit ? `<button class="del-btn" data-del-col="ventas" data-id="${v.id}">✕</button>` : ''}</td>
@@ -1288,18 +1447,27 @@ function renderVentas(){
   if(!ventaRows) ventaRows = `<tr><td colspan="5" class="empty">Sin ventas registradas aún</td></tr>`;
 
   const clienteOptions = state.clientes.map(c=>`<option value="${c.nombre}">${c.nombre}</option>`).join('');
+  const esParrillaForm = ventaProducto==='parrillas';
+  const tallaOptionsVenta = TALLAS_PARRILLA.map(t=>`<option value="${t}">${t}</option>`).join('');
 
   const formHtml = canEdit ? `
   <div class="card">
     <div class="card-title">Registrar Venta</div>
-    <div class="card-desc">Se descuenta del stock de casata terminado. ¿No ves tu cliente? Créalo en la pestaña "Clientes".</div>
+    <div class="card-desc">Se descuenta del stock terminado del producto elegido. ¿No ves tu cliente? Créalo en la pestaña "Clientes".</div>
     <div class="form-grid">
+      <div class="full"><label>Producto</label>
+        <select id="v-producto">
+          <option value="casata" ${!esParrillaForm?'selected':''}>Casata</option>
+          <option value="parrillas" ${esParrillaForm?'selected':''}>Parrillas Resortadas</option>
+        </select>
+      </div>
+      ${esParrillaForm ? `<div class="full"><label>Talla</label><select id="v-talla">${tallaOptionsVenta}</select></div>` : ''}
       <div class="full"><label>Cliente</label>
         <select id="v-cliente">${clienteOptions || '<option value="">Agrega un cliente primero</option>'}</select>
       </div>
       <div><label>Fecha</label><input id="v-fecha" type="date" value="${todayISO()}"></div>
-      <div><label>Cm vendidos</label><input id="v-cm" type="number" step="any"></div>
-      <div><label>Precio por cm ($)</label><input id="v-precio" type="number" step="any" value="${state.settings.precioCm||''}"></div>
+      <div><label>${esParrillaForm?'Unidades vendidas':'Cm vendidos'}</label><input id="v-cm" type="number" step="any"></div>
+      <div><label>${esParrillaForm?'Precio por unidad ($)':'Precio por cm ($)'}</label><input id="v-precio" type="number" step="any" value="${esParrillaForm ? (state.settings.precioParrilla||'') : (state.settings.precioCm||'')}"></div>
       <div>
         <label>Forma de pago</label>
         <select id="v-forma">
@@ -1314,9 +1482,9 @@ function renderVentas(){
   const toolbar = canEdit ? `<div class="panel-toolbar"><button class="export-btn" id="export-ventas">⬇ Excel</button> <button class="export-btn" id="export-ventas-pdf">⬇ PDF</button></div>` : '';
 
   return `${toolbar}
-  <div class="hero-card">
-    <div class="label">Cm de casata en stock terminado</div>
-    <div class="amount">${fmt(stockTerminado)} cm</div>
+  <div class="balance-grid">
+    <div class="balance-card"><div class="label">Casata en stock terminado</div><div class="val">${fmt(stockTerminado)} cm</div></div>
+    <div class="balance-card"><div class="label">Parrillas en stock terminado</div><div class="val">${fmt(stockParrillas)} un.</div></div>
   </div>
 
   ${formHtml}
@@ -2368,6 +2536,48 @@ function attachHandlers(){
     };
   });
 
+  const fpAdd = document.getElementById('fp-add');
+  if(fpAdd) fpAdd.onclick = async ()=>{
+    const talla = document.getElementById('fp-talla').value;
+    const material = document.getElementById('fp-material').value;
+    const cantidad = document.getElementById('fp-cantidad').value;
+    if(!talla || !material || !cantidad) return;
+    try{ await db.collection('formulaParrillas').add({talla, material, cantidadPorUnidad:Number(cantidad)}); }
+    catch(e){ alert('No se pudo agregar: ' + e.message); }
+  };
+
+  document.querySelectorAll('[data-editar-formula-parrilla]').forEach(btn=>{
+    btn.onclick = ()=>{
+      editandoFormulaParrillaId = btn.getAttribute('data-editar-formula-parrilla');
+      render();
+    };
+  });
+  document.querySelectorAll('[data-cancelar-formula-parrilla]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoFormulaParrillaId = null; render(); };
+  });
+  document.querySelectorAll('[data-guardar-formula-parrilla]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const id = btn.getAttribute('data-guardar-formula-parrilla');
+      const cantidad = document.getElementById('edit-fp-cant').value;
+      if(!cantidad) return;
+      try{
+        await db.collection('formulaParrillas').doc(id).update({cantidadPorUnidad:Number(cantidad)});
+        editandoFormulaParrillaId = null;
+        render();
+      }catch(e){ alert('No se pudo guardar: ' + e.message); }
+    };
+  });
+
+  const ppAdd = document.getElementById('pp-add');
+  if(ppAdd) ppAdd.onclick = async ()=>{
+    const fecha = document.getElementById('pp-fecha').value || todayISO();
+    const talla = document.getElementById('pp-talla').value;
+    const unidades = document.getElementById('pp-unidades').value;
+    if(!talla || !unidades) return;
+    try{ await db.collection('produccionParrillas').add({fecha, talla, unidades:Number(unidades)}); }
+    catch(e){ alert('No se pudo registrar: ' + e.message); }
+  };
+
   const eAdd = document.getElementById('e-add');
   if(eAdd) eAdd.onclick = async ()=>{
     const sel = document.getElementById('e-material');
@@ -2421,8 +2631,13 @@ function attachHandlers(){
     catch(e){ alert('No se pudo agregar el cliente: ' + e.message); }
   };
 
+  const vProductoSel = document.getElementById('v-producto');
+  if(vProductoSel) vProductoSel.onchange = ()=>{ ventaProducto = vProductoSel.value; render(); };
+
   const vAdd = document.getElementById('v-add');
   if(vAdd) vAdd.onclick = async ()=>{
+    const producto = document.getElementById('v-producto') ? document.getElementById('v-producto').value : 'casata';
+    const talla = document.getElementById('v-talla') ? document.getElementById('v-talla').value : null;
     const cliente = document.getElementById('v-cliente').value;
     const fecha = document.getElementById('v-fecha').value || todayISO();
     const cmVendidos = document.getElementById('v-cm').value;
@@ -2432,11 +2647,13 @@ function attachHandlers(){
     const total = Number(cmVendidos) * Number(precioPorCm);
     try{
       const numeroRemision = await obtenerSiguienteNumeroRemision();
-      await db.collection('ventas').add({
-        cliente, fecha, cmVendidos:Number(cmVendidos), precioPorCm:Number(precioPorCm),
+      const ventaData = {
+        cliente, fecha, producto, cmVendidos:Number(cmVendidos), precioPorCm:Number(precioPorCm),
         total, formaPago, pagado: formaPago==='efectivo',
         numeroRemision, creadoPor: myNombre
-      });
+      };
+      if(producto==='parrillas' && talla) ventaData.talla = talla;
+      await db.collection('ventas').add(ventaData);
     }catch(e){ alert('No se pudo registrar la venta: ' + e.message); }
   };
 
