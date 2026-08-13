@@ -288,6 +288,13 @@ function uid(){ return Math.random().toString(36).slice(2,9); }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 function fmt(n){ if(n===null||n===undefined||isNaN(n)) return '—'; return Number(n).toLocaleString('es-CO', {maximumFractionDigits:2}); }
 function fmtMoney(n){ if(n===null||n===undefined||isNaN(n)) return '—'; return '$' + Math.round(n).toLocaleString('es-CO'); }
+function nombreProducto(producto){
+  if(producto==='parrillas') return 'Parrillas Resortadas';
+  if(producto==='colchon_nuvora') return 'Colchón Nuvora';
+  if(producto==='colchon_ortopedico') return 'Colchón Ortopédico';
+  return 'Casata';
+}
+function esProductoUnidades(producto){ return producto!=='casata'; }
 
 async function downloadOrShareBlob(blob, filename, mimeType){
   try{
@@ -1193,7 +1200,7 @@ function renderProduccionParrillas(){
 }
 
 function renderInventario(){
-  const canEdit = myRole==='admin' || myRole==='inventario';
+  const canEdit = myRole==='admin' || myRole==='inventario' || myRole==='administrativo';
   let rows = state.entradas.slice(0,30).map(e=>{
     const costoTotal = costoTotalEntrada(e);
     let estadoPago = '<span class="tag-ok">Efectivo</span>';
@@ -1221,7 +1228,7 @@ function renderInventario(){
       + `</tbody></table></div>`;
   }
 
-  const toolbar = myRole==='admin' ? `<div class="panel-toolbar"><button class="export-btn" id="export-entradas">⬇ Excel</button> <button class="export-btn" id="export-entradas-pdf">⬇ PDF</button></div>` : '';
+  const toolbar = (myRole==='admin' || myRole==='administrativo') ? `<div class="panel-toolbar"><button class="export-btn" id="export-entradas">⬇ Excel</button> <button class="export-btn" id="export-entradas-pdf">⬇ PDF</button></div>` : '';
 
   const formHtml = canEdit ? `
     <div class="form-grid">
@@ -1314,7 +1321,7 @@ function generarRemisionPDF(venta){
 
   // ---- Encabezado (logo + datos empresa a la izquierda, REMISION a la derecha) ----
   const headerTop = margin;
-  const headerH = 46;
+  const headerH = 52;
 
   try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', margin+2, headerTop+2, 30, 30); }catch(e){}
 
@@ -1326,6 +1333,7 @@ function generarRemisionPDF(venta){
   doc.setFontSize(8);
   doc.text('NIT 9020856647', margin+2, headerTop+42);
   doc.text('Sucursal Barranquilla', margin+2, headerTop+47);
+  doc.text('Bancolombia Ahorros 554-000154-24', margin+2, headerTop+52);
 
   doc.setFont('helvetica','bold');
   doc.setFontSize(20);
@@ -1365,8 +1373,8 @@ function generarRemisionPDF(venta){
     margin: {left: margin, right: margin},
     head: [['CANTIDAD','DETALLE','VALOR UNITARIO','VALOR']],
     body: [[
-      `${fmt(venta.cmVendidos)} ${venta.producto==='parrillas' ? 'un.' : 'cm'}`,
-      venta.producto==='parrillas' ? `Parrillas Resortadas${venta.talla ? ' talla '+venta.talla : ''}` : 'Casata',
+      `${fmt(venta.cmVendidos)} ${esProductoUnidades(venta.producto) ? 'un.' : 'cm'}`,
+      `${nombreProducto(venta.producto)}${venta.talla ? ' talla '+venta.talla : ''}`,
       fmtMoney(venta.precioPorCm),
       fmtMoney(venta.total)
     ]],
@@ -1412,13 +1420,14 @@ function generarRemisionPDF(venta){
 let ventaProducto = 'casata';
 
 function renderVentas(){
-  const canEdit = myRole==='admin';
+  const canEdit = myRole==='admin' || myRole==='administrativo';
   const stockTerminado = stockCasataTerminada();
   const stockParrillas = stockParrillasTerminadas();
 
   // --- Historial de ventas ---
   let ventaRows = state.ventas.map(v=>{
-    const esParrilla = v.producto==='parrillas';
+    const producto = v.producto || 'casata';
+    const esUnidades = esProductoUnidades(producto);
     let estado;
     if(v.formaPago==='efectivo'){
       estado = `<span class="tag-ok">Efectivo</span>`;
@@ -1437,17 +1446,18 @@ function renderVentas(){
     const remisionBtn = `<button class="del-btn" data-remision="${v.id}" title="Generar remisión" style="color:var(--blue);">🖨</button>`;
     const dias = diasDeuda(v);
     return `<tr class="${(v.formaPago==='credito' && !v.pagado && dias>30) ? 'row-alert' : ''}">
-      <td>${v.fecha}<br><span style="font-size:10.5px;color:var(--ink-soft)">${v.cliente}${esParrilla?` · 🔩 Parrillas ${v.talla||''}`:''}</span></td>
-      <td class="num">${fmt(v.cmVendidos)} ${esParrilla?'un.':'cm'}</td>
+      <td>${v.fecha}<br><span style="font-size:10.5px;color:var(--ink-soft)">${v.cliente}${producto!=='casata'?` · ${nombreProducto(producto)}${v.talla?' '+v.talla:''}`:''}</span></td>
+      <td class="num">${fmt(v.cmVendidos)} ${esUnidades?'un.':'cm'}</td>
       <td class="num">${fmtMoney(v.total)}</td>
       <td>${estado}</td>
-      <td>${remisionBtn}${marcarBtn}${deshacerBtn}${canEdit ? `<button class="del-btn" data-del-col="ventas" data-id="${v.id}">✕</button>` : ''}</td>
+      <td>${remisionBtn}${marcarBtn}${deshacerBtn}${myRole==='admin' ? `<button class="del-btn" data-del-col="ventas" data-id="${v.id}">✕</button>` : ''}</td>
     </tr>`;
   }).join('');
   if(!ventaRows) ventaRows = `<tr><td colspan="5" class="empty">Sin ventas registradas aún</td></tr>`;
 
   const clienteOptions = state.clientes.map(c=>`<option value="${c.nombre}">${c.nombre}</option>`).join('');
   const esParrillaForm = ventaProducto==='parrillas';
+  const esUnidadesForm = ventaProducto!=='casata'; // parrillas, colchón nuvora, colchón ortopédico: se venden por unidad
   const tallaOptionsVenta = TALLAS_PARRILLA.map(t=>`<option value="${t}">${t}</option>`).join('');
 
   const formHtml = canEdit ? `
@@ -1457,8 +1467,10 @@ function renderVentas(){
     <div class="form-grid">
       <div class="full"><label>Producto</label>
         <select id="v-producto">
-          <option value="casata" ${!esParrillaForm?'selected':''}>Casata</option>
+          <option value="casata" ${!esParrillaForm && ventaProducto==='casata'?'selected':''}>Casata</option>
           <option value="parrillas" ${esParrillaForm?'selected':''}>Parrillas Resortadas</option>
+          <option value="colchon_nuvora" ${ventaProducto==='colchon_nuvora'?'selected':''}>Colchón Nuvora</option>
+          <option value="colchon_ortopedico" ${ventaProducto==='colchon_ortopedico'?'selected':''}>Colchón Ortopédico</option>
         </select>
       </div>
       ${esParrillaForm ? `<div class="full"><label>Talla</label><select id="v-talla">${tallaOptionsVenta}</select></div>` : ''}
@@ -1466,8 +1478,8 @@ function renderVentas(){
         <select id="v-cliente">${clienteOptions || '<option value="">Agrega un cliente primero</option>'}</select>
       </div>
       <div><label>Fecha</label><input id="v-fecha" type="date" value="${todayISO()}"></div>
-      <div><label>${esParrillaForm?'Unidades vendidas':'Cm vendidos'}</label><input id="v-cm" type="number" step="any"></div>
-      <div><label>${esParrillaForm?'Precio por unidad ($)':'Precio por cm ($)'}</label><input id="v-precio" type="number" step="any" value="${esParrillaForm ? (state.settings.precioParrilla||'') : (state.settings.precioCm||'')}"></div>
+      <div><label>${esUnidadesForm?'Unidades vendidas':'Cm vendidos'}</label><input id="v-cm" type="number" step="any"></div>
+      <div><label>${esUnidadesForm?'Precio por unidad ($)':'Precio por cm ($)'}</label><input id="v-precio" type="number" step="any" value="${esParrillaForm ? (state.settings.precioParrilla||'') : (ventaProducto==='casata' ? (state.settings.precioCm||'') : '')}"></div>
       <div>
         <label>Forma de pago</label>
         <select id="v-forma">
@@ -1497,7 +1509,7 @@ function renderVentas(){
 }
 
 function renderClientes(){
-  const canEdit = myRole==='admin';
+  const canEdit = myRole==='admin' || myRole==='administrativo';
   let rows = state.clientes.map(c=>{
     return `<tr data-search-row="clientes" data-search-text="${c.nombre.toLowerCase()}">
       <td>
@@ -1507,7 +1519,7 @@ function renderClientes(){
           ${c.documento ? 'Doc: '+c.documento : ''}${c.documento && c.direccion ? ' · ' : ''}${c.direccion||''}
         </span>
       </td>
-      <td>${canEdit ? `<button class="del-btn" data-del-col="clientes" data-id="${c.id}">✕</button>` : ''}</td>
+      <td>${myRole==='admin' ? `<button class="del-btn" data-del-col="clientes" data-id="${c.id}">✕</button>` : ''}</td>
     </tr>`;
   }).join('');
 
@@ -2227,7 +2239,7 @@ function renderFinanzas(){
   let clienteRows = clientesOrdenados.map(([nombre,d])=>`<tr><td>${nombre}</td><td class="num">${fmt(d.cm)} cm</td><td class="num">${fmtMoney(d.total)}</td><td class="num">${d.cartera>0?fmtMoney(d.cartera):'—'}</td></tr>`).join('');
   if(!clienteRows) clienteRows = `<tr><td colspan="4" style="text-align:center;color:var(--ink-soft);padding:16px;">Sin ventas registradas aún</td></tr>`;
 
-  const toolbar = myRole==='admin' ? `<div class="panel-toolbar"><button class="export-btn" id="export-balance">⬇ Excel</button> <button class="export-btn" id="export-balance-pdf">⬇ PDF</button></div>` : '';
+  const toolbar = (myRole==='admin' || myRole==='administrativo') ? `<div class="panel-toolbar"><button class="export-btn" id="export-balance">⬇ Excel</button> <button class="export-btn" id="export-balance-pdf">⬇ PDF</button></div>` : '';
 
   return `${toolbar}
 
