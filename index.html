@@ -247,6 +247,18 @@ async function obtenerSiguienteNumeroRemision(){
   return nuevoNumero;
 }
 
+async function obtenerSiguienteNumeroRecibido(){
+  const ref = db.collection('settings').doc('config');
+  let nuevoNumero;
+  await db.runTransaction(async (t)=>{
+    const doc = await t.get(ref);
+    const actual = (doc.exists && doc.data().ultimoNumeroRecibido) ? Number(doc.data().ultimoNumeroRecibido) : 0;
+    nuevoNumero = actual + 1;
+    t.set(ref, {ultimoNumeroRecibido: nuevoNumero}, {merge:true});
+  });
+  return nuevoNumero;
+}
+
 let currentUser = null;   // {uid, email}
 let myRole = null;        // 'admin' | 'produccion' | 'inventario' | 'administrativo' | 'sin-asignar'
 let myNombre = '';
@@ -279,6 +291,12 @@ let mesInforme = null;
 let fechaCuadre = null;
 let unsubscribers = [];
 let editandoFormulaId = null;
+let editandoEntradaId = null;
+let editandoVentaId = null;
+let editandoClienteId = null;
+let editandoMaterialId = null;
+let editandoProduccionId = null;
+let editandoProduccionParrillaId = null;
 let editandoFormulaParrillaId = null;
 let asistFlujo = null;    // 'ingreso' | 'salida'
 let asistConcepto = null;
@@ -967,14 +985,35 @@ function renderMateriales(){
     const stock = stockMaterial(m.nombre);
     const bajo = stock < Number(m.stockMinimo);
     const unidad = m.unidad || 'kg';
+    let filaEdicion = '';
+    if(canEdit && editandoMaterialId===m.id){
+      filaEdicion = `<tr><td colspan="6" style="background:var(--paper);">
+        <div class="form-grid cols3">
+          <div class="full"><label>Nombre</label><input id="edit-m-nombre" value="${m.nombre}"></div>
+          <div><label>Tipo</label><input id="edit-m-tipo" value="${m.tipo||''}"></div>
+          <div><label>Unidad</label>
+            <select id="edit-m-unidad">
+              <option value="kg" ${unidad==='kg'?'selected':''}>Kilos (kg)</option>
+              <option value="ml" ${unidad==='ml'?'selected':''}>Mililitros (ml)</option>
+              <option value="un" ${unidad==='un'?'selected':''}>Unidades (un)</option>
+            </select>
+          </div>
+          <div><label>Stock inicial</label><input id="edit-m-stock" type="number" step="any" value="${m.stockInicial}"></div>
+          <div><label>Stock mínimo</label><input id="edit-m-min" type="number" step="any" value="${m.stockMinimo}"></div>
+          <div><label>Costo unitario inicial ($)</label><input id="edit-m-costo" type="number" step="any" value="${m.costoInicial||0}"></div>
+          <button class="add-btn" data-guardar-material="${m.id}" style="grid-column:1/-1;">Guardar</button>
+          <button class="export-btn" data-cancelar-material style="grid-column:1/-1;">Cancelar</button>
+        </div>
+      </td></tr>`;
+    }
     return `<tr class="${bajo?'row-alert':''}">
       <td>${m.nombre}<br><span style="font-size:10.5px;color:var(--ink-soft)">${m.tipo}</span></td>
       <td class="num">${fmt(stock)} ${unidad}</td>
       <td class="num">${fmt(m.stockMinimo)} ${unidad}</td>
       <td class="num">${fmtMoney(valorInventario(m.nombre))}</td>
       <td>${bajo?'<span class="tag-bajo">⚠ BAJO</span>':'<span class="tag-ok">OK</span>'}</td>
-      <td>${canEdit ? `<button class="del-btn" data-del-col="materiales" data-id="${m.id}">✕</button>` : ''}</td>
-    </tr>`;
+      <td>${canEdit ? `<button class="del-btn" data-editar-material="${m.id}" title="Editar">✏️</button><button class="del-btn" data-del-col="materiales" data-id="${m.id}">✕</button>` : ''}</td>
+    </tr>${filaEdicion}`;
   }).join('');
   if(!rows) rows = `<tr><td colspan="6" class="empty">Sin materiales aún</td></tr>`;
 
@@ -1166,12 +1205,24 @@ function renderProduccionParrillas(){
   if(!resumenTallas) resumenTallas = `<div class="empty">Agrega la fórmula de al menos una talla en "Fórmula Parrillas" para ver cuánto puedes producir.</div>`;
 
   let prodRows = state.produccionParrillas.slice(0,30).map(p=>{
+    let filaEdicion = '';
+    if(myRole==='admin' && editandoProduccionParrillaId===p.id){
+      filaEdicion = `<tr><td colspan="4" style="background:var(--paper);">
+        <div class="form-grid">
+          <div><label>Fecha</label><input id="edit-pp-fecha" type="date" value="${p.fecha}"></div>
+          <div><label>Talla</label><select id="edit-pp-talla">${TALLAS_PARRILLA.map(t=>`<option value="${t}" ${t===p.talla?'selected':''}>${t}</option>`).join('')}</select></div>
+          <div class="full"><label>Unidades</label><input id="edit-pp-unidades" type="number" step="any" value="${p.unidades}"></div>
+          <button class="add-btn" data-guardar-produccion-parrilla="${p.id}" style="grid-column:1/-1;">Guardar</button>
+          <button class="export-btn" data-cancelar-produccion-parrilla style="grid-column:1/-1;">Cancelar</button>
+        </div>
+      </td></tr>`;
+    }
     return `<tr>
       <td>${p.fecha}</td>
       <td>${p.talla||'—'}</td>
       <td class="num">${fmt(p.unidades)} un.</td>
-      <td>${myRole==='admin' ? `<button class="del-btn" data-del-col="produccionParrillas" data-id="${p.id}">✕</button>` : ''}</td>
-    </tr>`;
+      <td>${myRole==='admin' ? `<button class="del-btn" data-editar-produccion-parrilla="${p.id}" title="Editar">✏️</button><button class="del-btn" data-del-col="produccionParrillas" data-id="${p.id}">✕</button>` : ''}</td>
+    </tr>${filaEdicion}`;
   }).join('');
   if(!prodRows) prodRows = `<tr><td colspan="4" class="empty">Sin producción de parrillas registrada aún</td></tr>`;
 
@@ -1201,6 +1252,10 @@ function renderProduccionParrillas(){
 
 function renderInventario(){
   const canEdit = myRole==='admin' || myRole==='inventario' || myRole==='administrativo';
+  const soloAdmin = myRole==='admin';
+
+  const options = state.materiales.map(m=>`<option value="${m.nombre}" data-unidad="${m.unidad||'kg'}">${m.nombre} (${m.unidad||'kg'})</option>`).join('');
+
   let rows = state.entradas.slice(0,30).map(e=>{
     const costoTotal = costoTotalEntrada(e);
     let estadoPago = '<span class="tag-ok">Efectivo</span>';
@@ -1208,18 +1263,40 @@ function renderInventario(){
       const saldo = saldoPendienteCompra(e);
       estadoPago = saldo>0 ? `<span class="tag-bajo">Debemos ${fmtMoney(saldo)}</span>` : '<span class="tag-ok">Pagado</span>';
     }
+    let filaEdicion = '';
+    if(soloAdmin && editandoEntradaId===e.id){
+      filaEdicion = `<tr><td colspan="6" style="background:var(--paper);">
+        <div class="form-grid">
+          <div class="full"><label>Material</label>
+            <select id="edit-e-material">${state.materiales.map(m=>`<option value="${m.nombre}" ${m.nombre===e.material?'selected':''}>${m.nombre} (${m.unidad||'kg'})</option>`).join('')}</select>
+          </div>
+          <div><label>Cantidad recibida</label><input id="edit-e-cantidad" type="number" step="any" value="${e.cantidad}"></div>
+          <div><label>Costo unitario ($)</label><input id="edit-e-costo" type="number" step="any" value="${e.costoUnitario||0}"></div>
+          <div><label>Fecha</label><input id="edit-e-fecha" type="date" value="${e.fecha}"></div>
+          <div>
+            <label>Forma de pago</label>
+            <select id="edit-e-forma">
+              <option value="efectivo" ${e.formaPago==='efectivo'?'selected':''}>Efectivo</option>
+              <option value="credito" ${e.formaPago==='credito'?'selected':''}>Fiado</option>
+            </select>
+          </div>
+          <div><label>Proveedor</label><input id="edit-e-proveedor" value="${e.proveedor||''}"></div>
+          <div class="full"><label>Observaciones</label><input id="edit-e-obs" value="${e.observaciones||''}"></div>
+          <button class="add-btn" data-guardar-entrada="${e.id}" style="grid-column:1/-1;">Guardar</button>
+          <button class="export-btn" data-cancelar-entrada style="grid-column:1/-1;">Cancelar</button>
+        </div>
+      </td></tr>`;
+    }
     return `<tr>
-      <td>${e.fecha}${e.proveedor?`<br><span style="font-size:10.5px;color:var(--ink-soft)">${e.proveedor}</span>`:''}</td>
+      <td>${e.fecha}${e.proveedor?`<br><span style="font-size:10.5px;color:var(--ink-soft)">${e.proveedor}</span>`:''}${e.observaciones?`<br><span style="font-size:10px;color:var(--ink-soft);font-style:italic;">${e.observaciones}</span>`:''}</td>
       <td>${e.material}</td>
       <td class="num">+${fmt(e.cantidad)} ${e.unidad||''}</td>
       <td class="num">${costoTotal>0?fmtMoney(costoTotal):'—'}</td>
       <td>${estadoPago}</td>
-      <td>${myRole==='admin' ? `<button class="del-btn" data-del-col="entradas" data-id="${e.id}">✕</button>` : ''}</td>
-    </tr>`;
+      <td>${canEdit ? `<button class="del-btn" data-recibido="${e.id}" title="Generar remisión de recibido" style="color:var(--blue);">🖨</button>` : ''}${soloAdmin ? `<button class="del-btn" data-editar-entrada="${e.id}" title="Editar">✏️</button><button class="del-btn" data-del-col="entradas" data-id="${e.id}">✕</button>` : ''}</td>
+    </tr>${filaEdicion}`;
   }).join('');
   if(!rows) rows = `<tr><td colspan="6" class="empty">Sin entradas registradas aún</td></tr>`;
-
-  const options = state.materiales.map(m=>`<option value="${m.nombre}" data-unidad="${m.unidad||'kg'}">${m.nombre} (${m.unidad||'kg'})</option>`).join('');
 
   let stockTable = '';
   if(myRole!=='admin'){
@@ -1246,28 +1323,41 @@ function renderInventario(){
         </select>
       </div>
       <div><label>Proveedor (si es fiado)</label><input id="e-proveedor" placeholder="Ej: Distribuidora ABC"></div>
+      <div class="full"><label>Observaciones (opcional)</label><input id="e-obs" placeholder="Ej: llegó con 2 rollos dañados"></div>
       <button class="add-btn" id="e-add">+ Registrar entrada</button>
     </div>` : '';
 
   return `${toolbar}<div class="card">
     <div class="card-title">Cargar Inventario</div>
-    <div class="card-desc">Registra cada compra o llegada de material. Se suma automáticamente al stock. Si es fiado, queda como deuda al proveedor.</div>
+    <div class="card-desc">Registra cada compra o llegada de material. Se suma automáticamente al stock. Si es fiado, queda como deuda al proveedor.${soloAdmin ? ' Toca ✏️ en una fila para corregir nombre, cantidad o valor.' : ''}</div>
+    ${formHtml}
     <table><thead><tr><th>Fecha</th><th>Material</th><th>Cantidad</th><th>Costo</th><th>Pago</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>
-    ${formHtml}
   </div>${stockTable}`;
 }
 
 function renderProduccion(){
   const canEdit = myRole==='admin' || myRole==='produccion';
   let rows = state.produccion.slice(0,30).map(p=>{
+    let filaEdicion = '';
+    if(myRole==='admin' && editandoProduccionId===p.id){
+      filaEdicion = `<tr><td colspan="5" style="background:var(--paper);">
+        <div class="form-grid">
+          <div><label>Fecha</label><input id="edit-p-fecha" type="date" value="${p.fecha}"></div>
+          <div><label>Bloques</label><input id="edit-p-bloques" type="number" step="any" value="${p.bloques}"></div>
+          <div class="full"><label>Cm por bloque</label><input id="edit-p-cmbloque" type="number" step="any" value="${p.cmPorBloque}"></div>
+          <button class="add-btn" data-guardar-produccion="${p.id}" style="grid-column:1/-1;">Guardar</button>
+          <button class="export-btn" data-cancelar-produccion style="grid-column:1/-1;">Cancelar</button>
+        </div>
+      </td></tr>`;
+    }
     return `<tr>
       <td>${p.fecha}</td>
       <td class="num">${fmt(p.bloques)}</td>
       <td class="num">${fmt(p.cmPorBloque)} cm</td>
       <td class="num">${fmt(p.cmTotal)} cm</td>
-      <td>${myRole==='admin' ? `<button class="del-btn" data-del-col="produccion" data-id="${p.id}">✕</button>` : ''}</td>
-    </tr>`;
+      <td>${myRole==='admin' ? `<button class="del-btn" data-editar-produccion="${p.id}" title="Editar">✏️</button><button class="del-btn" data-del-col="produccion" data-id="${p.id}">✕</button>` : ''}</td>
+    </tr>${filaEdicion}`;
   }).join('');
   if(!rows) rows = `<tr><td colspan="5" class="empty">Sin producción registrada aún</td></tr>`;
 
@@ -1417,6 +1507,119 @@ function generarRemisionPDF(venta){
   const blob = doc.output('blob');
   downloadOrShareBlob(blob, `remision-${numero}-${venta.cliente.replace(/\s+/g,'-')}.pdf`, 'application/pdf');
 }
+
+function generarRemisionRecibidoPDF(entrada){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:'mm', format:'a4'});
+  const pageW = 210;
+  const margin = 15;
+  const boxW = pageW - margin*2;
+  const navy = [20, 40, 75];
+  const numero = entrada.numeroRecibido ? String(entrada.numeroRecibido) : String(entrada.id||'').slice(-6).toUpperCase();
+  const costoTotal = costoTotalEntrada(entrada);
+
+  // ---- Encabezado ----
+  const headerTop = margin;
+  const headerH = 52;
+
+  try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', margin+2, headerTop+2, 30, 30); }catch(e){}
+
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(9);
+  doc.setTextColor(...navy);
+  doc.text('NUVORA COMFORT S.A.S', margin+2, headerTop+37);
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(8);
+  doc.text('NIT 9020856647', margin+2, headerTop+42);
+  doc.text('Sucursal Barranquilla', margin+2, headerTop+47);
+  doc.text('Bancolombia Ahorros 554-000154-24', margin+2, headerTop+52);
+
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(18);
+  doc.text('REMISION DE RECIBIDO', margin+boxW-2, headerTop+12, {align:'right'});
+
+  doc.setDrawColor(...navy);
+  doc.setLineWidth(0.4);
+  doc.rect(margin+boxW-46, headerTop+16, 46, 10);
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(10);
+  doc.text('N.', margin+boxW-42, headerTop+23);
+  doc.setFont('helvetica','bold');
+  doc.text(numero, margin+boxW-3, headerTop+23, {align:'right'});
+
+  // ---- Datos del proveedor ----
+  let y = headerTop + headerH + 8;
+  doc.setFontSize(10);
+  const campo = (label, valor) => {
+    doc.setFont('helvetica','bold'); doc.setTextColor(...navy);
+    doc.text(label, margin, y);
+    doc.setFont('helvetica','normal');
+    doc.setLineWidth(0.2); doc.setDrawColor(...navy);
+    doc.line(margin+30, y+1, margin+boxW, y+1);
+    doc.text(String(valor||''), margin+32, y);
+    y += 8;
+  };
+  campo('Fecha:', entrada.fecha);
+  campo('Proveedor:', entrada.proveedor || '(sin nombre)');
+  campo('Forma de pago:', entrada.formaPago==='credito' ? 'Fiado' : 'Efectivo');
+
+  // ---- Tabla ----
+  const tableY = y + 4;
+  doc.autoTable({
+    startY: tableY,
+    margin: {left: margin, right: margin},
+    head: [['CANTIDAD RECIBIDA','MATERIAL','COSTO UNITARIO','COSTO TOTAL']],
+    body: [[
+      `${fmt(entrada.cantidad)} ${entrada.unidad||''}`,
+      entrada.material,
+      entrada.costoUnitario ? fmtMoney(entrada.costoUnitario) : '—',
+      costoTotal>0 ? fmtMoney(costoTotal) : '—'
+    ]],
+    theme: 'grid',
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold', halign: 'center' },
+    styles: { lineColor: navy, lineWidth: 0.3, fontSize: 10, cellPadding: 4 },
+  });
+
+  let afterTableY = doc.lastAutoTable.finalY + 8;
+  if(entrada.observaciones){
+    doc.setFont('helvetica','italic');
+    doc.setFontSize(9);
+    doc.setTextColor(...navy);
+    doc.text(`Observaciones: ${entrada.observaciones}`, margin, afterTableY);
+    afterTableY += 8;
+  }
+
+  // ---- Recibido por (usuario que lo creó) ----
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(9);
+  doc.setTextColor(...navy);
+  doc.text(`Recibido por: ${entrada.creadoPor || '-'}`, margin, afterTableY);
+
+  // ---- Firma y Sello / Entregado por (proveedor) ----
+  const finalY = afterTableY + 22;
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(10);
+  doc.text('Firma y Sello Nuvora', margin, finalY);
+  doc.setLineWidth(0.2);
+  doc.line(margin, finalY+14, margin+62, finalY+14);
+
+  const rightColX = margin + boxW/2;
+  doc.setFont('helvetica','normal');
+  doc.text('Entregado por: ______________________', rightColX, finalY);
+  doc.text('CC: ______________________', rightColX, finalY+8);
+  doc.setFontSize(9);
+  doc.text('Material recibido a', rightColX, finalY+16);
+  doc.text('plena satisfaccion.', rightColX, finalY+21);
+
+  // ---- Borde exterior ----
+  const boxBottom = finalY + 30;
+  doc.setDrawColor(...navy);
+  doc.setLineWidth(0.6);
+  doc.rect(margin, margin, boxW, boxBottom - margin);
+
+  const blob = doc.output('blob');
+  downloadOrShareBlob(blob, `remision-recibido-${numero}-${(entrada.proveedor||'proveedor').replace(/\s+/g,'-')}.pdf`, 'application/pdf');
+}
 let ventaProducto = 'casata';
 
 function renderVentas(){
@@ -1444,14 +1647,39 @@ function renderVentas(){
     const deshacerBtn = (canEdit && v.formaPago==='credito' && v.pagado)
       ? `<button class="del-btn" data-despagar-id="${v.id}" title="Deshacer: volver a crédito pendiente" style="color:var(--red);">↩</button>` : '';
     const remisionBtn = `<button class="del-btn" data-remision="${v.id}" title="Generar remisión" style="color:var(--blue);">🖨</button>`;
+    const editarBtn = myRole==='admin' ? `<button class="del-btn" data-editar-venta="${v.id}" title="Editar">✏️</button>` : '';
     const dias = diasDeuda(v);
+
+    let filaEdicion = '';
+    if(myRole==='admin' && editandoVentaId===v.id){
+      const clienteOptsEdit = state.clientes.map(c=>`<option value="${c.nombre}" ${c.nombre===v.cliente?'selected':''}>${c.nombre}</option>`).join('');
+      filaEdicion = `<tr><td colspan="5" style="background:var(--paper);">
+        <div class="form-grid">
+          <div class="full"><label>Cliente</label><select id="edit-v-cliente">${clienteOptsEdit}</select></div>
+          <div><label>Fecha</label><input id="edit-v-fecha" type="date" value="${v.fecha}"></div>
+          <div><label>${esUnidades?'Unidades':'Cm vendidos'}</label><input id="edit-v-cm" type="number" step="any" value="${v.cmVendidos}"></div>
+          <div><label>Precio unitario ($)</label><input id="edit-v-precio" type="number" step="any" value="${v.precioPorCm}"></div>
+          <div>
+            <label>Forma de pago</label>
+            <select id="edit-v-forma">
+              <option value="efectivo" ${v.formaPago==='efectivo'?'selected':''}>Efectivo</option>
+              <option value="credito" ${v.formaPago==='credito'?'selected':''}>Crédito</option>
+            </select>
+          </div>
+          <div class="full"><label>Observaciones</label><input id="edit-v-obs" value="${v.observaciones||''}"></div>
+          <button class="add-btn" data-guardar-venta="${v.id}" style="grid-column:1/-1;">Guardar</button>
+          <button class="export-btn" data-cancelar-venta style="grid-column:1/-1;">Cancelar</button>
+        </div>
+      </td></tr>`;
+    }
+
     return `<tr class="${(v.formaPago==='credito' && !v.pagado && dias>30) ? 'row-alert' : ''}">
-      <td>${v.fecha}<br><span style="font-size:10.5px;color:var(--ink-soft)">${v.cliente}${producto!=='casata'?` · ${nombreProducto(producto)}${v.talla?' '+v.talla:''}`:''}</span></td>
+      <td>${v.fecha}<br><span style="font-size:10.5px;color:var(--ink-soft)">${v.cliente}${producto!=='casata'?` · ${nombreProducto(producto)}${v.talla?' '+v.talla:''}`:''}</span>${v.observaciones?`<br><span style="font-size:10px;color:var(--ink-soft);font-style:italic;">${v.observaciones}</span>`:''}</td>
       <td class="num">${fmt(v.cmVendidos)} ${esUnidades?'un.':'cm'}</td>
       <td class="num">${fmtMoney(v.total)}</td>
       <td>${estado}</td>
-      <td>${remisionBtn}${marcarBtn}${deshacerBtn}${myRole==='admin' ? `<button class="del-btn" data-del-col="ventas" data-id="${v.id}">✕</button>` : ''}</td>
-    </tr>`;
+      <td>${remisionBtn}${marcarBtn}${deshacerBtn}${editarBtn}${myRole==='admin' ? `<button class="del-btn" data-del-col="ventas" data-id="${v.id}">✕</button>` : ''}</td>
+    </tr>${filaEdicion}`;
   }).join('');
   if(!ventaRows) ventaRows = `<tr><td colspan="5" class="empty">Sin ventas registradas aún</td></tr>`;
 
@@ -1487,6 +1715,7 @@ function renderVentas(){
           <option value="credito">Crédito</option>
         </select>
       </div>
+      <div class="full"><label>Observaciones (opcional)</label><input id="v-obs" placeholder="Ej: entregar en la tarde, cliente pidió factura"></div>
       <button class="add-btn" id="v-add">+ Registrar venta</button>
     </div>
   </div>` : '';
@@ -1510,7 +1739,22 @@ function renderVentas(){
 
 function renderClientes(){
   const canEdit = myRole==='admin' || myRole==='administrativo';
+  const soloAdmin = myRole==='admin';
   let rows = state.clientes.map(c=>{
+    let filaEdicion = '';
+    if(soloAdmin && editandoClienteId===c.id){
+      filaEdicion = `<tr><td colspan="2" style="background:var(--paper);">
+        <div class="form-grid">
+          <div class="full"><label>Nombre</label><input id="edit-c-nombre" value="${c.nombre}"></div>
+          <div><label>Teléfono</label><input id="edit-c-telefono" value="${c.telefono||''}"></div>
+          <div><label>Documento</label><input id="edit-c-documento" value="${c.documento||''}"></div>
+          <div><label>Correo</label><input id="edit-c-email" value="${c.email||''}"></div>
+          <div><label>Dirección</label><input id="edit-c-direccion" value="${c.direccion||''}"></div>
+          <button class="add-btn" data-guardar-cliente="${c.id}" style="grid-column:1/-1;">Guardar</button>
+          <button class="export-btn" data-cancelar-cliente style="grid-column:1/-1;">Cancelar</button>
+        </div>
+      </td></tr>`;
+    }
     return `<tr data-search-row="clientes" data-search-text="${c.nombre.toLowerCase()}">
       <td>
         <strong>${c.nombre}</strong><br>
@@ -1519,8 +1763,8 @@ function renderClientes(){
           ${c.documento ? 'Doc: '+c.documento : ''}${c.documento && c.direccion ? ' · ' : ''}${c.direccion||''}
         </span>
       </td>
-      <td>${myRole==='admin' ? `<button class="del-btn" data-del-col="clientes" data-id="${c.id}">✕</button>` : ''}</td>
-    </tr>`;
+      <td>${soloAdmin ? `<button class="del-btn" data-editar-cliente="${c.id}" title="Editar">✏️</button><button class="del-btn" data-del-col="clientes" data-id="${c.id}">✕</button>` : ''}</td>
+    </tr>${filaEdicion}`;
   }).join('');
 
   const formHtml = canEdit ? `
@@ -2517,6 +2761,30 @@ function attachHandlers(){
     catch(e){ alert('No se pudo agregar: ' + e.message); }
   };
 
+  document.querySelectorAll('[data-editar-material]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoMaterialId = btn.getAttribute('data-editar-material'); render(); };
+  });
+  document.querySelectorAll('[data-cancelar-material]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoMaterialId = null; render(); };
+  });
+  document.querySelectorAll('[data-guardar-material]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const id = btn.getAttribute('data-guardar-material');
+      const nombre = document.getElementById('edit-m-nombre').value.trim();
+      const tipo = document.getElementById('edit-m-tipo').value.trim();
+      const unidad = document.getElementById('edit-m-unidad').value;
+      const stockInicial = Number(document.getElementById('edit-m-stock').value)||0;
+      const stockMinimo = Number(document.getElementById('edit-m-min').value)||0;
+      const costoInicial = Number(document.getElementById('edit-m-costo').value)||0;
+      if(!nombre) return;
+      try{
+        await db.collection('materiales').doc(id).update({nombre, tipo, unidad, stockInicial, stockMinimo, costoInicial});
+        editandoMaterialId = null;
+        render();
+      }catch(e){ alert('No se pudo guardar: ' + e.message); }
+    };
+  });
+
   const fAdd = document.getElementById('f-add');
   if(fAdd) fAdd.onclick = async ()=>{
     const material = document.getElementById('f-material').value;
@@ -2590,6 +2858,27 @@ function attachHandlers(){
     catch(e){ alert('No se pudo registrar: ' + e.message); }
   };
 
+  document.querySelectorAll('[data-editar-produccion-parrilla]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoProduccionParrillaId = btn.getAttribute('data-editar-produccion-parrilla'); render(); };
+  });
+  document.querySelectorAll('[data-cancelar-produccion-parrilla]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoProduccionParrillaId = null; render(); };
+  });
+  document.querySelectorAll('[data-guardar-produccion-parrilla]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const id = btn.getAttribute('data-guardar-produccion-parrilla');
+      const fecha = document.getElementById('edit-pp-fecha').value;
+      const talla = document.getElementById('edit-pp-talla').value;
+      const unidades = Number(document.getElementById('edit-pp-unidades').value);
+      if(!talla || !unidades) return;
+      try{
+        await db.collection('produccionParrillas').doc(id).update({fecha, talla, unidades});
+        editandoProduccionParrillaId = null;
+        render();
+      }catch(e){ alert('No se pudo guardar: ' + e.message); }
+    };
+  });
+
   const eAdd = document.getElementById('e-add');
   if(eAdd) eAdd.onclick = async ()=>{
     const sel = document.getElementById('e-material');
@@ -2600,16 +2889,48 @@ function attachHandlers(){
     const costoUnitario = Number(document.getElementById('e-costo') ? document.getElementById('e-costo').value : 0) || 0;
     const formaPago = document.getElementById('e-forma') ? document.getElementById('e-forma').value : 'efectivo';
     const proveedor = document.getElementById('e-proveedor') ? document.getElementById('e-proveedor').value.trim() : '';
+    const observaciones = document.getElementById('e-obs') ? document.getElementById('e-obs').value.trim() : '';
     if(!material || !cantidad) return;
     const costoTotal = Number(cantidad)*costoUnitario;
     try{
-      await db.collection('entradas').add({material, unidad, fecha, cantidad:Number(cantidad), costoUnitario, costoTotal, formaPago, proveedor});
+      const numeroRecibido = await obtenerSiguienteNumeroRecibido();
+      await db.collection('entradas').add({material, unidad, fecha, cantidad:Number(cantidad), costoUnitario, costoTotal, formaPago, proveedor, observaciones, numeroRecibido, creadoPor: myNombre});
       if(costoTotal>0 && formaPago==='efectivo'){
         await db.collection('cuadreCaja').add({fecha, tipo:'Salida', concepto:`Compra: ${material}`, monto:costoTotal});
       }
     }
     catch(e){ alert('No se pudo registrar: ' + e.message); }
   };
+
+  document.querySelectorAll('[data-editar-entrada]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoEntradaId = btn.getAttribute('data-editar-entrada'); render(); };
+  });
+  document.querySelectorAll('[data-cancelar-entrada]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoEntradaId = null; render(); };
+  });
+  document.querySelectorAll('[data-guardar-entrada]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const id = btn.getAttribute('data-guardar-entrada');
+      const sel = document.getElementById('edit-e-material');
+      const material = sel.value;
+      const unidad = sel.selectedOptions[0] ? sel.selectedOptions[0].getAttribute('data-unidad') : 'kg';
+      const cantidad = Number(document.getElementById('edit-e-cantidad').value);
+      const costoUnitario = Number(document.getElementById('edit-e-costo').value) || 0;
+      const fecha = document.getElementById('edit-e-fecha').value;
+      const formaPago = document.getElementById('edit-e-forma').value;
+      const proveedor = document.getElementById('edit-e-proveedor').value.trim();
+      const observaciones = document.getElementById('edit-e-obs') ? document.getElementById('edit-e-obs').value.trim() : '';
+      if(!material || !cantidad) return;
+      try{
+        await db.collection('entradas').doc(id).update({
+          material, unidad, cantidad, costoUnitario, costoTotal: cantidad*costoUnitario,
+          fecha, formaPago, proveedor, observaciones
+        });
+        editandoEntradaId = null;
+        render();
+      }catch(e){ alert('No se pudo guardar: ' + e.message); }
+    };
+  });
 
   const pAdd = document.getElementById('p-add');
   if(pAdd) pAdd.onclick = async ()=>{
@@ -2623,6 +2944,27 @@ function attachHandlers(){
       if(myRole==='admin') await db.collection('settings').doc('config').set({cmPorBloque:Number(cmPorBloque)}, {merge:true});
     }catch(e){ alert('No se pudo registrar: ' + e.message); }
   };
+
+  document.querySelectorAll('[data-editar-produccion]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoProduccionId = btn.getAttribute('data-editar-produccion'); render(); };
+  });
+  document.querySelectorAll('[data-cancelar-produccion]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoProduccionId = null; render(); };
+  });
+  document.querySelectorAll('[data-guardar-produccion]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const id = btn.getAttribute('data-guardar-produccion');
+      const fecha = document.getElementById('edit-p-fecha').value;
+      const bloques = Number(document.getElementById('edit-p-bloques').value);
+      const cmPorBloque = Number(document.getElementById('edit-p-cmbloque').value);
+      if(!bloques || !cmPorBloque) return;
+      try{
+        await db.collection('produccion').doc(id).update({fecha, bloques, cmPorBloque, cmTotal: bloques*cmPorBloque});
+        editandoProduccionId = null;
+        render();
+      }catch(e){ alert('No se pudo guardar: ' + e.message); }
+    };
+  });
 
   const precioInput = document.getElementById('precio-input');
   if(precioInput) precioInput.onchange = async ()=>{
@@ -2643,6 +2985,29 @@ function attachHandlers(){
     catch(e){ alert('No se pudo agregar el cliente: ' + e.message); }
   };
 
+  document.querySelectorAll('[data-editar-cliente]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoClienteId = btn.getAttribute('data-editar-cliente'); render(); };
+  });
+  document.querySelectorAll('[data-cancelar-cliente]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoClienteId = null; render(); };
+  });
+  document.querySelectorAll('[data-guardar-cliente]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const id = btn.getAttribute('data-guardar-cliente');
+      const nombre = document.getElementById('edit-c-nombre').value.trim();
+      const telefono = document.getElementById('edit-c-telefono').value.trim();
+      const documento = document.getElementById('edit-c-documento').value.trim();
+      const email = document.getElementById('edit-c-email').value.trim();
+      const direccion = document.getElementById('edit-c-direccion').value.trim();
+      if(!nombre) return;
+      try{
+        await db.collection('clientes').doc(id).update({nombre, telefono, documento, email, direccion});
+        editandoClienteId = null;
+        render();
+      }catch(e){ alert('No se pudo guardar: ' + e.message); }
+    };
+  });
+
   const vProductoSel = document.getElementById('v-producto');
   if(vProductoSel) vProductoSel.onchange = ()=>{ ventaProducto = vProductoSel.value; render(); };
 
@@ -2655,19 +3020,46 @@ function attachHandlers(){
     const cmVendidos = document.getElementById('v-cm').value;
     const precioPorCm = document.getElementById('v-precio').value || 0;
     const formaPago = document.getElementById('v-forma').value;
+    const observaciones = document.getElementById('v-obs') ? document.getElementById('v-obs').value.trim() : '';
     if(!cliente || !cmVendidos) return;
     const total = Number(cmVendidos) * Number(precioPorCm);
     try{
       const numeroRemision = await obtenerSiguienteNumeroRemision();
       const ventaData = {
         cliente, fecha, producto, cmVendidos:Number(cmVendidos), precioPorCm:Number(precioPorCm),
-        total, formaPago, pagado: formaPago==='efectivo',
+        total, formaPago, pagado: formaPago==='efectivo', observaciones,
         numeroRemision, creadoPor: myNombre
       };
       if(producto==='parrillas' && talla) ventaData.talla = talla;
       await db.collection('ventas').add(ventaData);
     }catch(e){ alert('No se pudo registrar la venta: ' + e.message); }
   };
+
+  document.querySelectorAll('[data-editar-venta]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoVentaId = btn.getAttribute('data-editar-venta'); render(); };
+  });
+  document.querySelectorAll('[data-cancelar-venta]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoVentaId = null; render(); };
+  });
+  document.querySelectorAll('[data-guardar-venta]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const id = btn.getAttribute('data-guardar-venta');
+      const cliente = document.getElementById('edit-v-cliente').value;
+      const fecha = document.getElementById('edit-v-fecha').value;
+      const cmVendidos = Number(document.getElementById('edit-v-cm').value);
+      const precioPorCm = Number(document.getElementById('edit-v-precio').value);
+      const formaPago = document.getElementById('edit-v-forma').value;
+      const observaciones = document.getElementById('edit-v-obs').value.trim();
+      if(!cliente || !cmVendidos) return;
+      try{
+        await db.collection('ventas').doc(id).update({
+          cliente, fecha, cmVendidos, precioPorCm, total: cmVendidos*precioPorCm, formaPago, observaciones
+        });
+        editandoVentaId = null;
+        render();
+      }catch(e){ alert('No se pudo guardar: ' + e.message); }
+    };
+  });
 
   document.querySelectorAll('[data-pagar-id]').forEach(btn=>{
     btn.onclick = async ()=>{
@@ -2689,6 +3081,23 @@ function attachHandlers(){
       const venta = state.ventas.find(v=>v.id===btn.getAttribute('data-remision'));
       if(!venta) return;
       try{ generarRemisionPDF(venta); }
+      catch(e){ alert('No se pudo generar la remisión: ' + e.message); }
+    };
+  });
+
+  document.querySelectorAll('[data-recibido]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const id = btn.getAttribute('data-recibido');
+      const entrada = state.entradas.find(e=>e.id===id);
+      if(!entrada) return;
+      try{
+        if(!entrada.numeroRecibido){
+          const numeroRecibido = await obtenerSiguienteNumeroRecibido();
+          await db.collection('entradas').doc(id).update({numeroRecibido});
+          entrada.numeroRecibido = numeroRecibido;
+        }
+        generarRemisionRecibidoPDF(entrada);
+      }
       catch(e){ alert('No se pudo generar la remisión: ' + e.message); }
     };
   });
