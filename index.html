@@ -309,7 +309,10 @@ function fmtMoney(n){ if(n===null||n===undefined||isNaN(n)) return '—'; return
 function nombreProducto(producto){
   if(producto==='parrillas') return 'Parrillas Resortadas';
   if(producto==='colchon_nuvora') return 'Colchón Nuvora';
+  if(producto==='colchon_resorte') return 'Colchón de Resorte';
   if(producto==='colchon_ortopedico') return 'Colchón Ortopédico';
+  if(producto==='marcos') return 'Marco';
+  if(producto==='resorte_bonell') return 'Resorte Bonell';
   return 'Casata';
 }
 function esProductoUnidades(producto){ return producto!=='casata'; }
@@ -372,6 +375,36 @@ function exportToPDF(filename, titulo, rows){
 }
 
 const TALLAS_PARRILLA = ['1.00', '1.40', '1.60', '2.00'];
+
+// Lista de precios de venta 2026 (vendedores) — Nuvora Comfort S.A.S.
+const PRECIOS_PRODUCTOS = {
+  colchon_resorte: {
+    label: 'Colchón de Resorte',
+    opciones: { '100x190': 300000, '120x190': 294286, '140x190': 340000, '160x190': 380000, '200x200': 481203 }
+  },
+  colchon_ortopedico: {
+    label: 'Colchón Ortopédico',
+    opciones: { '100x190': 440000, '140x190': 540000, '160x190': 580000 }
+  },
+  parrilla_estandar: {
+    label: 'Parrilla Estándar',
+    opciones: { '90x190': 96107, '100x190': 103517, '120x190': 118338, '140x190': 135000, '160x190': 149798, '200x200': 201362 }
+  },
+  parrilla_plus: {
+    label: 'Parrilla Plus',
+    opciones: { '90x190': 101185, '100x190': 109256, '120x190': 125480, '140x190': 143086, '160x190': 159311, '200x200': 213598 }
+  },
+  marcos: {
+    label: 'Marco',
+    opciones: { '90x190': 6918, '100x190': 7137, '120x190': 7360, '140x190': 9194, '160x190': 10559, '200x200': 16568 }
+  },
+  resorte_bonell: {
+    label: 'Resorte Bonell (unidad)',
+    precioUnico: 427
+  }
+};
+// Mapa talla (formato "1.40") -> medida de parrilla (formato "140x190") para reusar PRECIOS_PRODUCTOS.parrilla_*
+const TALLA_A_MEDIDA_PARRILLA = { '1.00':'100x190', '1.40':'140x190', '1.60':'160x190', '2.00':'200x200' };
 
 const ALL_TABS = [
   {id:'dashboard', label:'Dashboard'},
@@ -691,6 +724,25 @@ function comprasConSaldoPendiente(){
 }
 function totalDebemosProveedores(){
   return comprasConSaldoPendiente().reduce((s,e)=>s+saldoPendienteCompra(e),0);
+}
+
+// ---------- Conciliación (contactos que son cliente Y proveedor a la vez) ----------
+function contactosConciliacion(){
+  const meDebenPorNombre = {};
+  ventasConSaldoPendiente().forEach(v=>{
+    meDebenPorNombre[v.cliente] = (meDebenPorNombre[v.cliente]||0) + saldoPendiente(v);
+  });
+  const leDebemosPorNombre = {};
+  comprasConSaldoPendiente().forEach(e=>{
+    const nombre = e.proveedor || '(sin nombre)';
+    leDebemosPorNombre[nombre] = (leDebemosPorNombre[nombre]||0) + saldoPendienteCompra(e);
+  });
+  const nombresComunes = Object.keys(meDebenPorNombre).filter(n=> leDebemosPorNombre[n] !== undefined);
+  return nombresComunes.map(nombre=>{
+    const meDebe = meDebenPorNombre[nombre] || 0;
+    const leDebo = leDebemosPorNombre[nombre] || 0;
+    return { nombre, meDebe, leDebo, neto: meDebe - leDebo };
+  }).sort((a,b)=> Math.abs(b.neto) - Math.abs(a.neto));
 }
 
 // ---------- Capital de socios (aportes y préstamos) ----------
@@ -1621,6 +1673,9 @@ function generarRemisionRecibidoPDF(entrada){
   downloadOrShareBlob(blob, `remision-recibido-${numero}-${(entrada.proveedor||'proveedor').replace(/\s+/g,'-')}.pdf`, 'application/pdf');
 }
 let ventaProducto = 'casata';
+let ventaTalla = TALLAS_PARRILLA[0];
+let ventaTipoParrilla = 'estandar';
+let ventaMedida = null;
 
 function renderVentas(){
   const canEdit = myRole==='admin' || myRole==='administrativo';
@@ -1674,7 +1729,7 @@ function renderVentas(){
     }
 
     return `<tr class="${(v.formaPago==='credito' && !v.pagado && dias>30) ? 'row-alert' : ''}">
-      <td>${v.fecha}<br><span style="font-size:10.5px;color:var(--ink-soft)">${v.cliente}${producto!=='casata'?` · ${nombreProducto(producto)}${v.talla?' '+v.talla:''}`:''}</span>${v.observaciones?`<br><span style="font-size:10px;color:var(--ink-soft);font-style:italic;">${v.observaciones}</span>`:''}</td>
+      <td>${v.fecha}<br><span style="font-size:10.5px;color:var(--ink-soft)">${v.cliente}${producto!=='casata'?` · ${nombreProducto(producto)}${v.talla?' '+v.talla+(v.tipoParrilla==='plus'?' (Plus)':' (Estándar)'):''}${v.medida?' '+v.medida:''}`:''}</span>${v.observaciones?`<br><span style="font-size:10px;color:var(--ink-soft);font-style:italic;">${v.observaciones}</span>`:''}</td>
       <td class="num">${fmt(v.cmVendidos)} ${esUnidades?'un.':'cm'}</td>
       <td class="num">${fmtMoney(v.total)}</td>
       <td>${estado}</td>
@@ -1685,8 +1740,27 @@ function renderVentas(){
 
   const clienteOptions = state.clientes.map(c=>`<option value="${c.nombre}">${c.nombre}</option>`).join('');
   const esParrillaForm = ventaProducto==='parrillas';
-  const esUnidadesForm = ventaProducto!=='casata'; // parrillas, colchón nuvora, colchón ortopédico: se venden por unidad
-  const tallaOptionsVenta = TALLAS_PARRILLA.map(t=>`<option value="${t}">${t}</option>`).join('');
+  const esUnidadesForm = ventaProducto!=='casata'; // parrillas, colchones, marcos, resorte bonell: se venden por unidad
+  const tallaOptionsVenta = TALLAS_PARRILLA.map(t=>`<option value="${t}" ${t===ventaTalla?'selected':''}>${t}</option>`).join('');
+  const productosConMedida = ['colchon_resorte','colchon_ortopedico','marcos'];
+  const esMedidaForm = productosConMedida.includes(ventaProducto);
+  const medidaOpcionesActual = esMedidaForm ? PRECIOS_PRODUCTOS[ventaProducto].opciones : null;
+  const medidaOptionsVenta = medidaOpcionesActual ? Object.keys(medidaOpcionesActual).map(med=>`<option value="${med}" ${med===ventaMedida?'selected':''}>${med}</option>`).join('') : '';
+  const esBonellForm = ventaProducto==='resorte_bonell';
+
+  // Precio automático según el producto/talla/medida/tipo elegido (el vendedor aún puede sobreescribirlo)
+  let precioAuto = '';
+  if(esParrillaForm){
+    const medidaParrilla = TALLA_A_MEDIDA_PARRILLA[ventaTalla] || null;
+    const tabla = PRECIOS_PRODUCTOS[ventaTipoParrilla==='plus' ? 'parrilla_plus' : 'parrilla_estandar'].opciones;
+    precioAuto = medidaParrilla && tabla[medidaParrilla] ? tabla[medidaParrilla] : (state.settings.precioParrilla||'');
+  } else if(esMedidaForm){
+    precioAuto = (ventaMedida && medidaOpcionesActual[ventaMedida]) ? medidaOpcionesActual[ventaMedida] : '';
+  } else if(esBonellForm){
+    precioAuto = PRECIOS_PRODUCTOS.resorte_bonell.precioUnico;
+  } else if(ventaProducto==='casata'){
+    precioAuto = state.settings.precioCm || '';
+  }
 
   const formHtml = canEdit ? `
   <div class="card">
@@ -1697,17 +1771,27 @@ function renderVentas(){
         <select id="v-producto">
           <option value="casata" ${!esParrillaForm && ventaProducto==='casata'?'selected':''}>Casata</option>
           <option value="parrillas" ${esParrillaForm?'selected':''}>Parrillas Resortadas</option>
-          <option value="colchon_nuvora" ${ventaProducto==='colchon_nuvora'?'selected':''}>Colchón Nuvora</option>
+          <option value="colchon_resorte" ${ventaProducto==='colchon_resorte'?'selected':''}>Colchón de Resorte</option>
           <option value="colchon_ortopedico" ${ventaProducto==='colchon_ortopedico'?'selected':''}>Colchón Ortopédico</option>
+          <option value="marcos" ${ventaProducto==='marcos'?'selected':''}>Marco</option>
+          <option value="resorte_bonell" ${esBonellForm?'selected':''}>Resorte Bonell (unidad)</option>
         </select>
       </div>
-      ${esParrillaForm ? `<div class="full"><label>Talla</label><select id="v-talla">${tallaOptionsVenta}</select></div>` : ''}
+      ${esParrillaForm ? `
+      <div><label>Tipo de parrilla</label>
+        <select id="v-tipo-parrilla">
+          <option value="estandar" ${ventaTipoParrilla!=='plus'?'selected':''}>Estándar</option>
+          <option value="plus" ${ventaTipoParrilla==='plus'?'selected':''}>Plus</option>
+        </select>
+      </div>
+      <div><label>Talla</label><select id="v-talla">${tallaOptionsVenta}</select></div>` : ''}
+      ${esMedidaForm ? `<div class="full"><label>Medida</label><select id="v-medida">${medidaOptionsVenta}</select></div>` : ''}
       <div class="full"><label>Cliente</label>
         <select id="v-cliente">${clienteOptions || '<option value="">Agrega un cliente primero</option>'}</select>
       </div>
       <div><label>Fecha</label><input id="v-fecha" type="date" value="${todayISO()}"></div>
       <div><label>${esUnidadesForm?'Unidades vendidas':'Cm vendidos'}</label><input id="v-cm" type="number" step="any"></div>
-      <div><label>${esUnidadesForm?'Precio por unidad ($)':'Precio por cm ($)'}</label><input id="v-precio" type="number" step="any" value="${esParrillaForm ? (state.settings.precioParrilla||'') : (ventaProducto==='casata' ? (state.settings.precioCm||'') : '')}"></div>
+      <div><label>${esUnidadesForm?'Precio por unidad ($)':'Precio por cm ($)'}</label><input id="v-precio" type="number" step="any" value="${precioAuto}"></div>
       <div>
         <label>Forma de pago</label>
         <select id="v-forma">
@@ -2092,6 +2176,46 @@ function exportProveedoresPDF(soloProveedor){
   downloadOrShareBlob(pdfBlob, nombreArchivo, 'application/pdf');
 }
 
+function exportConciliacionPDF(){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const contactos = contactosConciliacion();
+  const totalMeDeben = contactos.reduce((s,c)=>s+c.meDebe,0);
+  const totalLeDebemos = contactos.reduce((s,c)=>s+c.leDebo,0);
+  const totalNeto = totalMeDeben - totalLeDebemos;
+
+  try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', 14, 8, 20, 20); }catch(e){}
+  doc.setFontSize(16); doc.text('Nuvora — Consolidado de Compra y Venta por Cliente', 38, 16);
+  doc.setFontSize(10);
+  doc.text(`Al ${todayISO()}  ·  Contactos que son cliente y proveedor a la vez`, 38, 23);
+
+  let startY = 32;
+  if(contactos.length===0){
+    doc.setFontSize(11); doc.text('No hay contactos que aparezcan a la vez como cliente y como proveedor con saldo pendiente.', 14, startY);
+  } else {
+    const body = contactos.map(c=>[
+      c.nombre,
+      fmtMoney(c.meDebe),
+      fmtMoney(c.leDebo),
+      (c.neto>=0 ? 'Me debe ' : 'Le debo ') + fmtMoney(Math.abs(c.neto))
+    ]);
+    doc.autoTable({
+      startY,
+      head:[['Contacto','Me debe (cliente)','Le debo (proveedor)','Saldo neto a conciliar']],
+      body,
+      theme:'striped', headStyles:{fillColor:[31,78,121]}, styles:{fontSize:9},
+      foot:[['TOTAL', fmtMoney(totalMeDeben), fmtMoney(totalLeDebemos), (totalNeto>=0?'Me deben ':'Debo ') + fmtMoney(Math.abs(totalNeto))]],
+      footStyles:{fillColor:[240,240,240], textColor:[0,0,0], fontStyle:'bold'}
+    });
+    startY = doc.lastAutoTable.finalY + 8;
+    doc.setFontSize(8); doc.setTextColor(120,120,120);
+    doc.text('Nota: el cruce se hace por coincidencia exacta del nombre entre "Cliente" y "Proveedor". Si un mismo contacto está registrado con nombres distintos en cada módulo, revísalo manualmente.', 14, startY, {maxWidth:180});
+  }
+
+  const pdfBlob = doc.output('blob');
+  downloadOrShareBlob(pdfBlob, `nuvora-consolidado-compra-venta-${todayISO()}.pdf`, 'application/pdf');
+}
+
 // ---------- Balance ----------
 // ---------- Cartera (independiente) ----------
 function renderCartera(){
@@ -2128,6 +2252,17 @@ function renderCartera(){
     </tr>`;
   }).join('');
 
+  const contactosConc = contactosConciliacion();
+  const totalMeDebenConc = contactosConc.reduce((s,c)=>s+c.meDebe,0);
+  const totalLeDebemosConc = contactosConc.reduce((s,c)=>s+c.leDebo,0);
+  const rowsConciliacion = contactosConc.map(c=>`
+    <tr>
+      <td>${c.nombre}</td>
+      <td class="num">${fmtMoney(c.meDebe)}</td>
+      <td class="num">${fmtMoney(c.leDebo)}</td>
+      <td class="num" style="font-weight:600; color:${c.neto>=0?'var(--green,#2C8C8C)':'var(--red)'};">${c.neto>=0?'Me debe ':'Le debo '}${fmtMoney(Math.abs(c.neto))}</td>
+    </tr>`).join('');
+
   return `<div class="hero-card" style="background:${totalVencido>0 ? 'var(--red)' : 'var(--blue)'};">
     <div class="label">Cartera total pendiente</div>
     <div class="amount">${fmtMoney(totalPendiente)}</div>
@@ -2140,6 +2275,21 @@ function renderCartera(){
     <div style="padding:0 16px 12px;"><input type="text" placeholder="🔍 Buscar cliente..." data-search-input="cartera" style="width:100%; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);"></div>
     <table><thead><tr><th>Cliente</th><th>Debe en total</th><th>Abonar</th></tr></thead>
     <tbody>${rows}<tr data-search-empty="cartera"><td colspan="3" class="empty">Escribe arriba para buscar</td></tr></tbody></table>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Consolidado de Compra y Venta por Cliente</div>
+    <div class="card-desc">Contactos que son cliente y proveedor a la vez: lo que te deben como cliente vs. lo que les debes como proveedor, para cruzar cuentas. El nombre debe coincidir exactamente entre ambos módulos.</div>
+    ${contactosConc.length ? `<table><thead><tr><th>Contacto</th><th>Me debe</th><th>Le debo</th><th>Saldo neto</th></tr></thead>
+    <tbody>${rowsConciliacion}
+      <tr style="font-weight:700; background:var(--paper-soft,rgba(0,0,0,.03));">
+        <td>TOTAL</td><td class="num">${fmtMoney(totalMeDebenConc)}</td><td class="num">${fmtMoney(totalLeDebemosConc)}</td>
+        <td class="num">${(totalMeDebenConc-totalLeDebemosConc)>=0?'Me deben ':'Debo '}${fmtMoney(Math.abs(totalMeDebenConc-totalLeDebemosConc))}</td>
+      </tr>
+    </tbody></table>` : `<div class="empty" style="padding:0 16px 12px;">No hay contactos que aparezcan como cliente y proveedor a la vez con saldo pendiente.</div>`}
+    <div style="padding:0 16px 16px;">
+      <button class="export-btn" id="conciliacion-pdf" style="width:100%; text-align:center;">⬇ Descargar Consolidado (PDF)</button>
+    </div>
   </div>
 
   <div class="card">
@@ -3009,12 +3159,26 @@ function attachHandlers(){
   });
 
   const vProductoSel = document.getElementById('v-producto');
-  if(vProductoSel) vProductoSel.onchange = ()=>{ ventaProducto = vProductoSel.value; render(); };
+  if(vProductoSel) vProductoSel.onchange = ()=>{ ventaProducto = vProductoSel.value; ventaMedida = null; render(); };
+
+  const vTallaSel = document.getElementById('v-talla');
+  if(vTallaSel) vTallaSel.onchange = ()=>{ ventaTalla = vTallaSel.value; render(); };
+
+  const vTipoParrillaSel = document.getElementById('v-tipo-parrilla');
+  if(vTipoParrillaSel) vTipoParrillaSel.onchange = ()=>{ ventaTipoParrilla = vTipoParrillaSel.value; render(); };
+
+  const vMedidaSel = document.getElementById('v-medida');
+  if(vMedidaSel){
+    if(!ventaMedida) ventaMedida = vMedidaSel.value;
+    vMedidaSel.onchange = ()=>{ ventaMedida = vMedidaSel.value; render(); };
+  }
 
   const vAdd = document.getElementById('v-add');
   if(vAdd) vAdd.onclick = async ()=>{
     const producto = document.getElementById('v-producto') ? document.getElementById('v-producto').value : 'casata';
     const talla = document.getElementById('v-talla') ? document.getElementById('v-talla').value : null;
+    const tipoParrilla = document.getElementById('v-tipo-parrilla') ? document.getElementById('v-tipo-parrilla').value : null;
+    const medida = document.getElementById('v-medida') ? document.getElementById('v-medida').value : null;
     const cliente = document.getElementById('v-cliente').value;
     const fecha = document.getElementById('v-fecha').value || todayISO();
     const cmVendidos = document.getElementById('v-cm').value;
@@ -3030,7 +3194,8 @@ function attachHandlers(){
         total, formaPago, pagado: formaPago==='efectivo', observaciones,
         numeroRemision, creadoPor: myNombre
       };
-      if(producto==='parrillas' && talla) ventaData.talla = talla;
+      if(producto==='parrillas' && talla){ ventaData.talla = talla; ventaData.tipoParrilla = tipoParrilla || 'estandar'; }
+      if(medida) ventaData.medida = medida;
       await db.collection('ventas').add(ventaData);
     }catch(e){ alert('No se pudo registrar la venta: ' + e.message); }
   };
@@ -3233,6 +3398,9 @@ function attachHandlers(){
       try{ exportCarteraPDF(cliente); }catch(e){ alert('No se pudo exportar: ' + e.message); }
     };
   });
+
+  const conciliacionPdf = document.getElementById('conciliacion-pdf');
+  if(conciliacionPdf) conciliacionPdf.onclick = ()=>{ try{ exportConciliacionPDF(); }catch(e){ alert('No se pudo exportar: ' + e.message); } };
 
   const plAplicar = document.getElementById('pl-aplicar');
   if(plAplicar) plAplicar.onclick = ()=>{
