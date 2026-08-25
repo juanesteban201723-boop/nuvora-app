@@ -735,20 +735,27 @@ function totalDebemosProveedores(){
 
 // ---------- Conciliación (contactos que son cliente Y proveedor a la vez) ----------
 function contactosConciliacion(){
-  const meDebenPorNombre = {};
+  // Normaliza para comparar (ignora mayúsculas/minúsculas y espacios extra), pero conserva el nombre original más usado para mostrarlo
+  const normalizar = (s)=> (s||'').trim().toLowerCase().replace(/\s+/g,' ');
+
+  const meDebenPorClave = {};
   ventasConSaldoPendiente().forEach(v=>{
-    meDebenPorNombre[v.cliente] = (meDebenPorNombre[v.cliente]||0) + saldoPendiente(v);
+    const clave = normalizar(v.cliente);
+    if(!meDebenPorClave[clave]) meDebenPorClave[clave] = {nombre:v.cliente, total:0};
+    meDebenPorClave[clave].total += saldoPendiente(v);
   });
-  const leDebemosPorNombre = {};
+  const leDebemosPorClave = {};
   comprasConSaldoPendiente().forEach(e=>{
-    const nombre = e.proveedor || '(sin nombre)';
-    leDebemosPorNombre[nombre] = (leDebemosPorNombre[nombre]||0) + saldoPendienteCompra(e);
+    const nombreOriginal = e.proveedor || '(sin nombre)';
+    const clave = normalizar(nombreOriginal);
+    if(!leDebemosPorClave[clave]) leDebemosPorClave[clave] = {nombre:nombreOriginal, total:0};
+    leDebemosPorClave[clave].total += saldoPendienteCompra(e);
   });
-  const nombresComunes = Object.keys(meDebenPorNombre).filter(n=> leDebemosPorNombre[n] !== undefined);
-  return nombresComunes.map(nombre=>{
-    const meDebe = meDebenPorNombre[nombre] || 0;
-    const leDebo = leDebemosPorNombre[nombre] || 0;
-    return { nombre, meDebe, leDebo, neto: meDebe - leDebo };
+  const clavesComunes = Object.keys(meDebenPorClave).filter(k=> leDebemosPorClave[k] !== undefined);
+  return clavesComunes.map(clave=>{
+    const meDebe = meDebenPorClave[clave].total || 0;
+    const leDebo = leDebemosPorClave[clave].total || 0;
+    return { nombre: meDebenPorClave[clave].nombre, nombreCliente: meDebenPorClave[clave].nombre, nombreProveedor: leDebemosPorClave[clave].nombre, meDebe, leDebo, neto: meDebe - leDebo };
   }).sort((a,b)=> Math.abs(b.neto) - Math.abs(a.neto));
 }
 
@@ -2299,8 +2306,8 @@ function renderConsolidacionCartera(){
     const expandido = expandidoConcNombre === c.nombre;
     let filaDetalle = '';
     if(expandido){
-      const ventasCliente = ventasConSaldoPendiente().filter(v=>v.cliente===c.nombre).sort((a,b)=>a.fecha.localeCompare(b.fecha));
-      const comprasProveedor = comprasConSaldoPendiente().filter(e=>(e.proveedor||'(sin nombre)')===c.nombre).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+      const ventasCliente = ventasConSaldoPendiente().filter(v=>v.cliente===c.nombreCliente).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+      const comprasProveedor = comprasConSaldoPendiente().filter(e=>(e.proveedor||'(sin nombre)')===c.nombreProveedor).sort((a,b)=>a.fecha.localeCompare(b.fecha));
       filaDetalle = `<tr><td colspan="5" style="background:var(--paper);">
         <div style="display:flex; gap:16px; flex-wrap:wrap; padding:8px 4px;">
           <div style="flex:1; min-width:220px;">
@@ -2315,7 +2322,7 @@ function renderConsolidacionCartera(){
       </td></tr>`;
     }
     return `<tr data-search-row="consolidacion" data-search-text="${c.nombre.toLowerCase()}">
-      <td style="cursor:pointer;" data-toggle-conc="${c.nombre}">${expandido?'▾':'▸'} ${c.nombre}</td>
+      <td style="cursor:pointer;" data-toggle-conc="${c.nombre}">${expandido?'▾':'▸'} ${c.nombreCliente}${c.nombreCliente!==c.nombreProveedor ? `<br><span style="font-size:10px;color:var(--ink-soft);">(como proveedor: ${c.nombreProveedor})</span>` : ''}</td>
       <td class="num">${fmtMoney(c.meDebe)}</td>
       <td class="num">${fmtMoney(c.leDebo)}</td>
       <td class="num" style="font-weight:600; color:${c.neto>=0?'var(--green,#2C8C8C)':'var(--red)'};">${c.neto>=0?'Me debe ':'Le debo '}${fmtMoney(Math.abs(c.neto))}</td>
