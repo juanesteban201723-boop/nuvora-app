@@ -2984,7 +2984,32 @@ function renderAdministrativo(){
       </div>`).join('')}
   </div>` : '';
 
-  return renderAsistente() + duplicadosCard + `<div class="card">
+  // --- Fusión manual (para casos como "Espumados" vs "Espumas de la costa", que no se detectan solos) ---
+  const todosNombresContacto = nombresUnicosNormalizados(
+    state.clientes.map(c=>c.nombre),
+    state.proveedoresCatalogo.map(p=>p.nombre),
+    state.ventas.map(v=>v.cliente),
+    state.entradas.map(e=>e.proveedor),
+    state.abonos.map(a=>a.cliente),
+    state.pagosProveedor.map(p=>p.proveedor)
+  );
+  const fusionManualCard = soloAdmin ? `
+  <div class="card">
+    <div class="card-title">Fusionar Nombres Manualmente</div>
+    <div class="card-desc">¿Dos nombres distintos son en realidad el mismo contacto (ej: "Espumados de la costa" y "Espumas de la costa")? Marca los que quieras unir y elige cuál nombre dejar. Esto también actualiza TODOS los registros permanentemente.</div>
+    <div style="padding:0 16px 12px; max-height:220px; overflow-y:auto; border:1px solid var(--line); border-radius:6px; margin:0 16px;">
+      ${todosNombresContacto.map(n=>`
+        <label style="display:flex; align-items:center; gap:8px; padding:8px 4px; border-bottom:1px solid var(--line); font-size:13px; cursor:pointer;">
+          <input type="checkbox" class="fusion-check" value="${n}"> ${n}
+        </label>`).join('')}
+    </div>
+    <div class="form-grid">
+      <div class="full"><label>Nombre final que van a tener (elige uno de los marcados)</label><input id="fusion-nombre-final" placeholder="Ej: Espumas de la Costa"></div>
+      <button class="add-btn" id="fusion-add">✓ Fusionar los marcados en este nombre</button>
+    </div>
+  </div>` : '';
+
+  return renderAsistente() + duplicadosCard + fusionManualCard + `<div class="card">
     <div class="card-title">Cuadre de Caja</div>
     <div class="card-desc">Busca por fecha, tipo o concepto para ver un movimiento.</div>
     <div style="padding:0 16px 12px;"><input type="text" placeholder="🔍 Buscar movimiento..." data-search-input="cuadre" style="width:100%; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);"></div>
@@ -4047,6 +4072,20 @@ function attachHandlers(){
       }catch(e){ alert('No se pudo unificar: ' + e.message); }
     };
   });
+
+  const fusionAdd = document.getElementById('fusion-add');
+  if(fusionAdd) fusionAdd.onclick = async ()=>{
+    const marcados = Array.from(document.querySelectorAll('.fusion-check:checked')).map(chk=>chk.value);
+    const nombreFinal = document.getElementById('fusion-nombre-final').value.trim();
+    if(marcados.length<2){ alert('Marca al menos 2 nombres para fusionar.'); return; }
+    if(!nombreFinal){ alert('Escribe el nombre final que van a tener.'); return; }
+    if(!marcados.includes(nombreFinal) && !confirm(`El nombre final "${nombreFinal}" no coincide exactamente con ninguno de los marcados. ¿Aún así quieres usarlo?`)) return;
+    if(!confirm(`Vas a fusionar ${marcados.length} nombres (${marcados.join(', ')}) en "${nombreFinal}". Esto cambia TODOS los registros existentes permanentemente. ¿Continuar?`)) return;
+    try{
+      const cambios = await unificarNombre(marcados, nombreFinal);
+      alert(`Listo, se actualizaron ${cambios} registros a "${nombreFinal}".`);
+    }catch(e){ alert('No se pudo fusionar: ' + e.message); }
+  };
   if(cfAdd) cfAdd.onclick = async ()=>{
     const concepto = document.getElementById('cf-concepto').value.trim();
     const monto = Number(document.getElementById('cf-monto').value);
