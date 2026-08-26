@@ -2447,6 +2447,75 @@ function renderConsolidacionCartera(){
 }
 
 let historicoContactoSel = '';
+let historicoDesde = '';
+let historicoHasta = '';
+
+function datosHistoricoContacto(nombreContacto, desde, hasta){
+  const clave = normalizarNombre(nombreContacto);
+  const enRango = (fecha)=> (!desde || fecha>=desde) && (!hasta || fecha<=hasta);
+  const ventas = state.ventas.filter(v=>normalizarNombre(v.cliente)===clave && enRango(v.fecha)).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const compras = state.entradas.filter(e=>normalizarNombre(e.proveedor||'')===clave && enRango(e.fecha)).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const abonosRecibidos = state.abonos.filter(a=>normalizarNombre(a.cliente)===clave && enRango(a.fecha)).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const pagosHechos = state.pagosProveedor.filter(p=>normalizarNombre(p.proveedor||'')===clave && enRango(p.fecha)).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const totalVentas = ventas.reduce((s,v)=>s+Number(v.total||0),0);
+  const totalCompras = compras.reduce((s,e)=>s+costoTotalEntrada(e),0);
+  const totalAbonos = abonosRecibidos.reduce((s,a)=>s+Number(a.monto||0),0);
+  const totalPagos = pagosHechos.reduce((s,p)=>s+Number(p.monto||0),0);
+  // El saldo pendiente ACTUAL siempre es a la fecha de hoy (no depende del filtro de fechas del reporte)
+  const meDebeAhora = ventasConSaldoPendiente().filter(v=>normalizarNombre(v.cliente)===clave).reduce((s,v)=>s+saldoPendiente(v),0);
+  const leDeboAhora = comprasConSaldoPendiente().filter(e=>normalizarNombre(e.proveedor||'')===clave).reduce((s,e)=>s+saldoPendienteCompra(e),0);
+  return { ventas, compras, abonosRecibidos, pagosHechos, totalVentas, totalCompras, totalAbonos, totalPagos, meDebeAhora, leDeboAhora };
+}
+
+function exportHistoricoPDF(nombreContacto, desde, hasta){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const d = datosHistoricoContacto(nombreContacto, desde, hasta);
+
+  try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', 14, 8, 20, 20); }catch(e){}
+  doc.setFontSize(16); doc.text('Nuvora — Histórico Completo por Contacto', 38, 16);
+  doc.setFontSize(10);
+  const rangoTexto = (desde || hasta) ? `Del ${desde||'inicio'} al ${hasta||'hoy'}` : 'Todo el histórico';
+  doc.text(`Contacto: ${nombreContacto}  ·  ${rangoTexto}  ·  Generado: ${todayISO()}`, 38, 23);
+
+  let startY = 32;
+  doc.autoTable({
+    startY,
+    head:[['Resumen','Monto']],
+    body:[
+      ['Total vendido a este contacto', fmtMoney(d.totalVentas)],
+      ['Total comprado a este contacto', fmtMoney(d.totalCompras)],
+      ['Total abonos recibidos (me pagó)', fmtMoney(d.totalAbonos)],
+      ['Total pagos hechos (le pagué)', fmtMoney(d.totalPagos)],
+      [d.meDebeAhora>=d.leDeboAhora ? 'Saldo actual (a hoy): me debe' : 'Saldo actual (a hoy): le debo', fmtMoney(Math.abs(d.meDebeAhora-d.leDeboAhora))]
+    ],
+    theme:'striped', headStyles:{fillColor:[31,78,121]}, styles:{fontSize:9}
+  });
+  startY = doc.lastAutoTable.finalY + 8;
+
+  const body = [];
+  d.ventas.forEach(v=> body.push([v.fecha, 'Venta', v.numeroRemision?'#'+v.numeroRemision:'—', `${nombreProducto(v.producto)}${v.talla?' '+v.talla:''}${v.medida?' '+v.medida:''}`, fmtMoney(v.total), v.formaPago==='credito'?'Crédito':'Efectivo', v.observaciones||'']));
+  d.compras.forEach(e=> body.push([e.fecha, 'Compra', e.numeroRecibido?'#'+e.numeroRecibido:'—', e.material, fmtMoney(costoTotalEntrada(e)), e.formaPago==='credito'?'Fiado':'Efectivo', e.observaciones||'']));
+  d.abonosRecibidos.forEach(a=>{
+    const ventaOrigen = state.ventas.find(v=>v.id===a.ventaId);
+    body.push([a.fecha, 'Abono recibido', ventaOrigen&&ventaOrigen.numeroRemision?'#'+ventaOrigen.numeroRemision:'—', '—', fmtMoney(a.monto), '—', a.observaciones||'']);
+  });
+  d.pagosHechos.forEach(p=>{
+    const entradaOrigen = state.entradas.find(e=>e.id===p.entradaId);
+    body.push([p.fecha, 'Pago hecho', entradaOrigen&&entradaOrigen.numeroRecibido?'#'+entradaOrigen.numeroRecibido:'—', '—', fmtMoney(p.monto), '—', p.observaciones||'']);
+  });
+  body.sort((a,b)=> a[0].localeCompare(b[0]));
+
+  doc.autoTable({
+    startY,
+    head:[['Fecha','Tipo','N°','Detalle','Monto','Forma','Observación']],
+    body: body.length ? body : [['—','Sin movimientos','','','','','']],
+    theme:'striped', headStyles:{fillColor:[31,78,121]}, styles:{fontSize:8.5}
+  });
+
+  const pdfBlob = doc.output('blob');
+  downloadOrShareBlob(pdfBlob, `nuvora-historico-${nombreContacto.replace(/[^a-zA-Z0-9]/g,'-')}-${todayISO()}.pdf`, 'application/pdf');
+}
 
 // ---------- Histórico de Compras y Ventas (todo lo que le compré/vendí/abonó/pagó a un contacto) ----------
 function renderHistorico(){
@@ -2461,12 +2530,13 @@ function renderHistorico(){
   let contenido = `<div class="empty" style="padding:0 16px 16px;">Elige un contacto arriba para ver su historial completo.</div>`;
 
   if(historicoContactoSel){
+    const enRango = (fecha)=> (!historicoDesde || fecha>=historicoDesde) && (!historicoHasta || fecha<=historicoHasta);
     const clave = normalizarNombre(historicoContactoSel);
 
-    const ventas = state.ventas.filter(v=>normalizarNombre(v.cliente)===clave).sort((a,b)=>b.fecha.localeCompare(a.fecha));
-    const compras = state.entradas.filter(e=>normalizarNombre(e.proveedor||'')===clave).sort((a,b)=>b.fecha.localeCompare(a.fecha));
-    const abonosRecibidos = state.abonos.filter(a=>normalizarNombre(a.cliente)===clave).sort((a,b)=>b.fecha.localeCompare(a.fecha));
-    const pagosHechos = state.pagosProveedor.filter(p=>normalizarNombre(p.proveedor||'')===clave).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+    const ventas = state.ventas.filter(v=>normalizarNombre(v.cliente)===clave && enRango(v.fecha)).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+    const compras = state.entradas.filter(e=>normalizarNombre(e.proveedor||'')===clave && enRango(e.fecha)).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+    const abonosRecibidos = state.abonos.filter(a=>normalizarNombre(a.cliente)===clave && enRango(a.fecha)).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+    const pagosHechos = state.pagosProveedor.filter(p=>normalizarNombre(p.proveedor||'')===clave && enRango(p.fecha)).sort((a,b)=>b.fecha.localeCompare(a.fecha));
 
     const totalVentas = ventas.reduce((s,v)=>s+Number(v.total||0),0);
     const totalCompras = compras.reduce((s,e)=>s+costoTotalEntrada(e),0);
@@ -2476,24 +2546,30 @@ function renderHistorico(){
     const leDeboAhora = comprasConSaldoPendiente().filter(e=>normalizarNombre(e.proveedor||'')===clave).reduce((s,e)=>s+saldoPendienteCompra(e),0);
 
     const filasVentas = ventas.map(v=>`<tr>
-      <td>${v.fecha}</td><td>Venta</td><td>${nombreProducto(v.producto)}${v.talla?' '+v.talla:''}${v.medida?' '+v.medida:''}</td>
+      <td>${v.fecha}</td><td>Venta</td><td>${v.numeroRemision?'#'+v.numeroRemision:'—'}</td><td>${nombreProducto(v.producto)}${v.talla?' '+v.talla:''}${v.medida?' '+v.medida:''}</td>
       <td class="num">${fmtMoney(v.total)}</td><td>${v.formaPago==='credito'?'Crédito':'Efectivo'}</td>
       <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${v.observaciones||''}</td></tr>`).join('');
 
     const filasCompras = compras.map(e=>`<tr>
-      <td>${e.fecha}</td><td>Compra</td><td>${e.material}</td>
+      <td>${e.fecha}</td><td>Compra</td><td>${e.numeroRecibido?'#'+e.numeroRecibido:'—'}</td><td>${e.material}</td>
       <td class="num">${fmtMoney(costoTotalEntrada(e))}</td><td>${e.formaPago==='credito'?'Fiado':'Efectivo'}</td>
       <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${e.observaciones||''}</td></tr>`).join('');
 
-    const filasAbonos = abonosRecibidos.map(a=>`<tr>
-      <td>${a.fecha}</td><td>Abono recibido</td><td>—</td>
+    const filasAbonos = abonosRecibidos.map(a=>{
+      const ventaOrigen = state.ventas.find(v=>v.id===a.ventaId);
+      return `<tr>
+      <td>${a.fecha}</td><td>Abono recibido</td><td>${ventaOrigen&&ventaOrigen.numeroRemision?'#'+ventaOrigen.numeroRemision:'—'}</td><td>—</td>
       <td class="num">${fmtMoney(a.monto)}</td><td>—</td>
-      <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${a.observaciones||''}</td></tr>`).join('');
+      <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${a.observaciones||''}</td></tr>`;
+    }).join('');
 
-    const filasPagos = pagosHechos.map(p=>`<tr>
-      <td>${p.fecha}</td><td>Pago hecho</td><td>—</td>
+    const filasPagos = pagosHechos.map(p=>{
+      const entradaOrigen = state.entradas.find(e=>e.id===p.entradaId);
+      return `<tr>
+      <td>${p.fecha}</td><td>Pago hecho</td><td>${entradaOrigen&&entradaOrigen.numeroRecibido?'#'+entradaOrigen.numeroRecibido:'—'}</td><td>—</td>
       <td class="num">${fmtMoney(p.monto)}</td><td>—</td>
-      <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${p.observaciones||''}</td></tr>`).join('');
+      <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${p.observaciones||''}</td></tr>`;
+    }).join('');
 
     contenido = `
     <div class="hero-card" style="background:${(meDebeAhora-leDeboAhora)>=0?'var(--blue)':'var(--red)'};">
@@ -2513,25 +2589,33 @@ function renderHistorico(){
         <tr><td>Total abonos recibidos (me pagó)</td><td class="num">${fmtMoney(totalAbonos)}</td></tr>
         <tr><td>Total pagos hechos (le pagué)</td><td class="num">${fmtMoney(totalPagos)}</td></tr>
       </tbody></table>
+      <div style="padding:0 16px 16px;">
+        <button class="export-btn" id="historico-pdf" style="width:100%; text-align:center;">⬇ Descargar histórico de ${historicoContactoSel}${(historicoDesde||historicoHasta) ? ' (rango elegido)' : ' (todo)'} — PDF</button>
+      </div>
     </div>
 
     <div class="card">
-      <div class="card-title">Historial completo (más reciente primero)</div>
-      <table><thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle</th><th>Monto</th><th>Forma</th><th>Observación</th></tr></thead>
+      <div class="card-title">Historial completo (más reciente primero)${(historicoDesde||historicoHasta) ? ` — Del ${historicoDesde||'inicio'} al ${historicoHasta||'hoy'}` : ''}</div>
+      <table><thead><tr><th>Fecha</th><th>Tipo</th><th>N°</th><th>Detalle</th><th>Monto</th><th>Forma</th><th>Observación</th></tr></thead>
       <tbody>${filasVentas}${filasCompras}${filasAbonos}${filasPagos}
-      ${(!ventas.length && !compras.length && !abonosRecibidos.length && !pagosHechos.length) ? '<tr><td colspan="6" class="empty">Sin movimientos con este contacto</td></tr>' : ''}
+      ${(!ventas.length && !compras.length && !abonosRecibidos.length && !pagosHechos.length) ? '<tr><td colspan="7" class="empty">Sin movimientos con este contacto</td></tr>' : ''}
       </tbody></table>
     </div>`;
   }
 
   return `<div class="card">
     <div class="card-title">Histórico de Compras y Ventas</div>
-    <div class="card-desc">Elige un cliente o proveedor para ver TODO lo que le has vendido, comprado, los abonos que te ha hecho y los pagos que le has hecho, con sus observaciones — todo en un solo lugar.</div>
-    <div style="padding:0 16px 16px;">
-      <select id="hist-contacto" style="width:100%; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);">
-        <option value="">-- Elige un cliente o proveedor --</option>
-        ${contactoOptions}
-      </select>
+    <div class="card-desc">Elige un cliente o proveedor para ver TODO lo que le has vendido, comprado, los abonos que te ha hecho y los pagos que le has hecho, con sus observaciones — todo en un solo lugar. Puedes filtrar por rango de fechas o dejarlo vacío para ver el total completo.</div>
+    <div class="form-grid" style="padding:0 16px 16px;">
+      <div class="full"><label>Cliente o proveedor</label>
+        <select id="hist-contacto">
+          <option value="">-- Elige un cliente o proveedor --</option>
+          ${contactoOptions}
+        </select>
+      </div>
+      <div><label>Desde (opcional)</label><input id="hist-desde" type="date" value="${historicoDesde}"></div>
+      <div><label>Hasta (opcional)</label><input id="hist-hasta" type="date" value="${historicoHasta}"></div>
+      ${(historicoDesde || historicoHasta) ? `<button class="export-btn" id="hist-limpiar-fechas" style="grid-column:1/-1;">✕ Quitar filtro de fechas (ver todo)</button>` : ''}
     </div>
   </div>
   ${contenido}`;
@@ -3751,6 +3835,18 @@ function attachHandlers(){
 
   const histContactoSel = document.getElementById('hist-contacto');
   if(histContactoSel) histContactoSel.onchange = ()=>{ historicoContactoSel = histContactoSel.value; render(); };
+
+  const histDesde = document.getElementById('hist-desde');
+  if(histDesde) histDesde.onchange = ()=>{ historicoDesde = histDesde.value; render(); };
+
+  const histHasta = document.getElementById('hist-hasta');
+  if(histHasta) histHasta.onchange = ()=>{ historicoHasta = histHasta.value; render(); };
+
+  const histLimpiarFechas = document.getElementById('hist-limpiar-fechas');
+  if(histLimpiarFechas) histLimpiarFechas.onclick = ()=>{ historicoDesde=''; historicoHasta=''; render(); };
+
+  const historicoPdf = document.getElementById('historico-pdf');
+  if(historicoPdf) historicoPdf.onclick = ()=>{ try{ exportHistoricoPDF(historicoContactoSel, historicoDesde, historicoHasta); }catch(e){ alert('No se pudo exportar: ' + e.message); } };
 
   document.querySelectorAll('[data-toggle-conc]').forEach(td=>{
     td.onclick = ()=>{
