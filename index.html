@@ -414,12 +414,14 @@ const ALL_TABS = [
   {id:'formula', label:'Fórmula Casata'},
   {id:'formulaParrillas', label:'Fórmula Parrillas'},
   {id:'inventario', label:'Cargar Inventario'},
+  {id:'compras', label:'Compras'},
   {id:'produccion', label:'Producción Casata'},
   {id:'produccionParrillas', label:'Producción Parrillas'},
   {id:'ventas', label:'Ventas'},
   {id:'clientes', label:'Clientes'},
   {id:'cartera', label:'Cartera'},
   {id:'consolidacion', label:'Consolidación de Cartera'},
+  {id:'historico', label:'Histórico'},
   {id:'administrativo', label:'Administrativo'},
   {id:'finanzas', label:'Finanzas'},
 ];
@@ -427,7 +429,7 @@ const ALL_TABS = [
 function getTabsForCurrentUser(){
   if(myRole==='admin') return [...ALL_TABS, {id:'usuarios', label:'Usuarios'}];
   if(myRole==='produccion') return [{id:'produccion', label:'Producción Casata'}, {id:'produccionParrillas', label:'Producción Parrillas'}];
-  if(myRole==='inventario') return [{id:'inventario', label:'Cargar Inventario'}];
+  if(myRole==='inventario') return [{id:'inventario', label:'Cargar Inventario'}, {id:'compras', label:'Compras'}];
   if(myRole==='administrativo') return ALL_TABS.filter(t=>myPermisos.includes(t.id));
   return [];
 }
@@ -715,6 +717,32 @@ function ventasConSaldoPendiente(){
   return state.ventas.filter(v=> v.formaPago==='credito' && saldoPendiente(v) > 0);
 }
 
+// ---------- Normalización de nombres de proveedor (para que "Phoenix", "PHOENIX", "phoenix" se traten como el mismo) ----------
+function normalizarNombre(s){
+  return (s||'').trim().toLowerCase().replace(/\s+/g,' ');
+}
+// Agrupa una lista de entradas de compra por proveedor, ignorando mayúsculas/espacios.
+// Devuelve {clave: {nombre: <nombre a mostrar, el más usado>, items: [...]}}
+function agruparPorProveedor(entradas){
+  const grupos = {};
+  const conteoNombres = {};
+  entradas.forEach(e=>{
+    const nombreOriginal = e.proveedor || '(sin nombre)';
+    const clave = normalizarNombre(nombreOriginal);
+    if(!grupos[clave]) grupos[clave] = { items: [] };
+    grupos[clave].items.push(e);
+    conteoNombres[clave] = conteoNombres[clave] || {};
+    conteoNombres[clave][nombreOriginal] = (conteoNombres[clave][nombreOriginal]||0) + 1;
+  });
+  Object.keys(grupos).forEach(clave=>{
+    // usa el nombre (con su capitalización original) que más veces se repite
+    const opciones = conteoNombres[clave];
+    const nombreMasUsado = Object.keys(opciones).sort((a,b)=>opciones[b]-opciones[a])[0];
+    grupos[clave].nombre = nombreMasUsado;
+  });
+  return grupos;
+}
+
 // ---------- Cuentas por pagar a proveedores (compras fiadas) ----------
 function pagosProveedorDe(entradaId){
   return state.pagosProveedor.filter(p=>p.entradaId===entradaId).reduce((s,p)=>s+Number(p.monto||0),0);
@@ -922,6 +950,7 @@ function renderPanels(){
   if(activeTab==='materiales') div.innerHTML = renderMateriales();
   if(activeTab==='formula') div.innerHTML = renderFormula();
   if(activeTab==='inventario') div.innerHTML = renderInventario();
+  if(activeTab==='compras') div.innerHTML = renderCompras();
   if(activeTab==='produccion') div.innerHTML = renderProduccion();
   if(activeTab==='produccionParrillas') div.innerHTML = renderProduccionParrillas();
   if(activeTab==='formulaParrillas') div.innerHTML = renderFormulaParrillas();
@@ -929,6 +958,7 @@ function renderPanels(){
   if(activeTab==='clientes') div.innerHTML = renderClientes();
   if(activeTab==='cartera') div.innerHTML = renderCartera();
   if(activeTab==='consolidacion') div.innerHTML = renderConsolidacionCartera();
+  if(activeTab==='historico') div.innerHTML = renderHistorico();
   if(activeTab==='administrativo') div.innerHTML = renderAdministrativo();
   if(activeTab==='finanzas') div.innerHTML = renderFinanzas();
   if(activeTab==='usuarios') div.innerHTML = renderUsuarios();
@@ -1315,6 +1345,68 @@ function renderProduccionParrillas(){
   <div class="card"><div style="padding:14px 16px; font-size:13px; color:var(--ink-soft);">
     Total histórico producido (todas las tallas): <strong style="color:var(--ink);">${fmt(totalUnidadesProducidas)}</strong> unidades
   </div></div>`;
+}
+
+// ---------- Compras (elige proveedor del catálogo, registra directo y cae a Inventario) ----------
+function renderCompras(){
+  const canEdit = myRole==='admin' || myRole==='inventario' || myRole==='administrativo';
+  const options = state.materiales.map(m=>`<option value="${m.nombre}" data-unidad="${m.unidad||'kg'}">${m.nombre} (${m.unidad||'kg'})</option>`).join('');
+  const proveedorOptions = state.proveedoresCatalogo.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre))
+    .map(p=>`<option value="${p.nombre}">${p.nombre}</option>`).join('');
+
+  const comprasRecientes = state.entradas.filter(e=>e.proveedor).slice(0,15).map(e=>{
+    const costoTotal = costoTotalEntrada(e);
+    let estadoPago = '<span class="tag-ok">Efectivo</span>';
+    if(e.formaPago==='credito'){
+      const saldo = saldoPendienteCompra(e);
+      estadoPago = saldo>0 ? `<span class="tag-bajo">Debemos ${fmtMoney(saldo)}</span>` : '<span class="tag-ok">Pagado</span>';
+    }
+    return `<tr>
+      <td>${e.fecha}<br><span style="font-size:10.5px;color:var(--ink-soft)">${e.proveedor}</span>${e.observaciones?`<br><span style="font-size:10px;color:var(--ink-soft);font-style:italic;">${e.observaciones}</span>`:''}</td>
+      <td>${e.material}</td>
+      <td class="num">+${fmt(e.cantidad)} ${e.unidad||''}</td>
+      <td class="num">${costoTotal>0?fmtMoney(costoTotal):'—'}</td>
+      <td>${estadoPago}</td>
+    </tr>`;
+  }).join('');
+
+  const formHtml = canEdit ? `
+    <div class="form-grid">
+      <div class="full"><label>Proveedor</label>
+        <select id="cp-proveedor">
+          <option value="">-- Selecciona un proveedor del catálogo --</option>
+          ${proveedorOptions}
+        </select>
+        <div style="font-size:11px; color:var(--ink-soft); margin-top:4px;">¿No está en la lista? Agrégalo primero en Administrativo → Catálogo de Proveedores.</div>
+      </div>
+      <div class="full"><label>Material</label>
+        <select id="cp-material">${options || '<option value="">Pide al administrador que cargue materiales</option>'}</select>
+      </div>
+      <div><label>Fecha</label><input id="cp-fecha" type="date" value="${todayISO()}"></div>
+      <div><label>Cantidad</label><input id="cp-cantidad" type="number" step="any"></div>
+      <div class="full"><label>Costo unitario ($, opcional)</label><input id="cp-costo" type="number" step="any" placeholder="Ej: 1900"></div>
+      <div>
+        <label>Forma de pago</label>
+        <select id="cp-forma">
+          <option value="efectivo">Efectivo (ya pagado)</option>
+          <option value="credito">Fiado (le debo al proveedor)</option>
+        </select>
+      </div>
+      <div class="full"><label>Observaciones (opcional)</label><input id="cp-obs" placeholder="Ej: llegó con 2 rollos dañados"></div>
+      <button class="add-btn" id="cp-add">+ Registrar compra (se carga al Inventario)</button>
+    </div>` : '';
+
+  return `<div class="card">
+    <div class="card-title">Compras</div>
+    <div class="card-desc">Elige el proveedor del catálogo y el material comprado: al guardar, queda registrada de una vez en el Inventario (suma el stock) y, si es fiado, se suma a la deuda de ese proveedor.</div>
+    ${formHtml}
+  </div>
+
+  <div class="card">
+    <div class="card-title">Compras recientes</div>
+    <table><thead><tr><th>Fecha/Proveedor</th><th>Material</th><th>Cantidad</th><th>Costo</th><th>Pago</th></tr></thead>
+    <tbody>${comprasRecientes || '<tr><td colspan="5" class="empty">Sin compras registradas aún</td></tr>'}</tbody></table>
+  </div>`;
 }
 
 function renderInventario(){
@@ -2111,22 +2203,23 @@ function exportCarteraPDF(soloCliente){
 }
 
 function exportProveedoresExcel(soloProveedor){
-  const pendientes = comprasConSaldoPendiente().filter(e=> !soloProveedor || (e.proveedor||'(sin nombre)')===soloProveedor);
-  const porProveedor = {};
-  pendientes.forEach(e=>{ const key = e.proveedor||'(sin nombre)'; if(!porProveedor[key]) porProveedor[key]=[]; porProveedor[key].push(e); });
-  const nombres = Object.keys(porProveedor).sort();
+  const soloProveedorClave = soloProveedor ? normalizarNombre(soloProveedor) : null;
+  const pendientes = comprasConSaldoPendiente().filter(e=> !soloProveedorClave || normalizarNombre(e.proveedor||'(sin nombre)')===soloProveedorClave);
+  const porProveedor = agruparPorProveedor(pendientes);
+  const claves = Object.keys(porProveedor).sort((a,b)=>porProveedor[a].nombre.localeCompare(porProveedor[b].nombre));
 
   const wb = XLSX.utils.book_new();
 
-  const resumen = nombres.map(nombre=>{
-    const es = porProveedor[nombre];
-    return {Proveedor:nombre, 'Total Adeudado': es.reduce((s,e)=>s+saldoPendienteCompra(e),0), 'N° Compras Pendientes': es.length};
+  const resumen = claves.map(clave=>{
+    const es = porProveedor[clave].items;
+    return {Proveedor:porProveedor[clave].nombre, 'Total Adeudado': es.reduce((s,e)=>s+saldoPendienteCompra(e),0), 'N° Compras Pendientes': es.length};
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen.length?resumen:[{Proveedor:'Sin deudas a proveedores'}]), 'Resumen por Proveedor');
 
   const detalle = [];
-  nombres.forEach(nombre=>{
-    porProveedor[nombre].sort((a,b)=>a.fecha.localeCompare(b.fecha)).forEach(e=>{
+  claves.forEach(clave=>{
+    const nombre = porProveedor[clave].nombre;
+    porProveedor[clave].items.sort((a,b)=>a.fecha.localeCompare(b.fecha)).forEach(e=>{
       detalle.push({Proveedor:nombre, Tipo:'Compra', Fecha:e.fecha, Material:e.material, Monto:e.costoTotal, 'Saldo Pendiente':saldoPendienteCompra(e)});
       state.pagosProveedor.filter(p=>p.entradaId===e.id).sort((a,b)=>a.fecha.localeCompare(b.fecha)).forEach(p=>{
         detalle.push({Proveedor:nombre, Tipo:'Pago', Fecha:p.fecha, Material:'', Monto:-p.monto, 'Saldo Pendiente':''});
@@ -2144,10 +2237,10 @@ function exportProveedoresExcel(soloProveedor){
 function exportProveedoresPDF(soloProveedor){
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
-  const pendientes = comprasConSaldoPendiente().filter(e=> !soloProveedor || (e.proveedor||'(sin nombre)')===soloProveedor);
-  const porProveedor = {};
-  pendientes.forEach(e=>{ const key = e.proveedor||'(sin nombre)'; if(!porProveedor[key]) porProveedor[key]=[]; porProveedor[key].push(e); });
-  const nombres = Object.keys(porProveedor).sort();
+  const soloProveedorClave = soloProveedor ? normalizarNombre(soloProveedor) : null;
+  const pendientes = comprasConSaldoPendiente().filter(e=> !soloProveedorClave || normalizarNombre(e.proveedor||'(sin nombre)')===soloProveedorClave);
+  const porProveedor = agruparPorProveedor(pendientes);
+  const claves = Object.keys(porProveedor).sort((a,b)=>porProveedor[a].nombre.localeCompare(porProveedor[b].nombre));
   const totalGeneral = pendientes.reduce((s,e)=>s+saldoPendienteCompra(e),0);
 
   try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', 14, 8, 20, 20); }catch(e){}
@@ -2156,11 +2249,12 @@ function exportProveedoresPDF(soloProveedor){
   doc.text(soloProveedor ? `Proveedor: ${soloProveedor}  ·  Al ${todayISO()}  ·  Debemos: ${fmtMoney(totalGeneral)}` : `Al ${todayISO()}  ·  Total adeudado: ${fmtMoney(totalGeneral)}`, 38, 23);
 
   let startY = 32;
-  if(nombres.length===0){
+  if(claves.length===0){
     doc.setFontSize(11); doc.text('No hay deudas con proveedores — todo al día.', 14, startY);
   }
-  nombres.forEach(nombre=>{
-    const es = porProveedor[nombre].sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  claves.forEach(clave=>{
+    const nombre = porProveedor[clave].nombre;
+    const es = porProveedor[clave].items.sort((a,b)=>a.fecha.localeCompare(b.fecha));
     const totalProveedor = es.reduce((s,e)=>s+saldoPendienteCompra(e),0);
     if(startY > 260){ doc.addPage(); startY = 20; }
     if(!soloProveedor){
@@ -2352,6 +2446,97 @@ function renderConsolidacionCartera(){
   </div>`;
 }
 
+let historicoContactoSel = '';
+
+// ---------- Histórico de Compras y Ventas (todo lo que le compré/vendí/abonó/pagó a un contacto) ----------
+function renderHistorico(){
+  const nombresClientes = state.clientes.map(c=>c.nombre);
+  const nombresProveedores = [...new Set([
+    ...state.proveedoresCatalogo.map(p=>p.nombre),
+    ...state.entradas.filter(e=>e.proveedor).map(e=>e.proveedor)
+  ])];
+  const todosContactos = [...new Set([...nombresClientes, ...nombresProveedores])].sort((a,b)=>a.localeCompare(b));
+  const contactoOptions = todosContactos.map(n=>`<option value="${n}" ${n===historicoContactoSel?'selected':''}>${n}</option>`).join('');
+
+  let contenido = `<div class="empty" style="padding:0 16px 16px;">Elige un contacto arriba para ver su historial completo.</div>`;
+
+  if(historicoContactoSel){
+    const clave = normalizarNombre(historicoContactoSel);
+
+    const ventas = state.ventas.filter(v=>normalizarNombre(v.cliente)===clave).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+    const compras = state.entradas.filter(e=>normalizarNombre(e.proveedor||'')===clave).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+    const abonosRecibidos = state.abonos.filter(a=>normalizarNombre(a.cliente)===clave).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+    const pagosHechos = state.pagosProveedor.filter(p=>normalizarNombre(p.proveedor||'')===clave).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+
+    const totalVentas = ventas.reduce((s,v)=>s+Number(v.total||0),0);
+    const totalCompras = compras.reduce((s,e)=>s+costoTotalEntrada(e),0);
+    const totalAbonos = abonosRecibidos.reduce((s,a)=>s+Number(a.monto||0),0);
+    const totalPagos = pagosHechos.reduce((s,p)=>s+Number(p.monto||0),0);
+    const meDebeAhora = ventasConSaldoPendiente().filter(v=>normalizarNombre(v.cliente)===clave).reduce((s,v)=>s+saldoPendiente(v),0);
+    const leDeboAhora = comprasConSaldoPendiente().filter(e=>normalizarNombre(e.proveedor||'')===clave).reduce((s,e)=>s+saldoPendienteCompra(e),0);
+
+    const filasVentas = ventas.map(v=>`<tr>
+      <td>${v.fecha}</td><td>Venta</td><td>${nombreProducto(v.producto)}${v.talla?' '+v.talla:''}${v.medida?' '+v.medida:''}</td>
+      <td class="num">${fmtMoney(v.total)}</td><td>${v.formaPago==='credito'?'Crédito':'Efectivo'}</td>
+      <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${v.observaciones||''}</td></tr>`).join('');
+
+    const filasCompras = compras.map(e=>`<tr>
+      <td>${e.fecha}</td><td>Compra</td><td>${e.material}</td>
+      <td class="num">${fmtMoney(costoTotalEntrada(e))}</td><td>${e.formaPago==='credito'?'Fiado':'Efectivo'}</td>
+      <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${e.observaciones||''}</td></tr>`).join('');
+
+    const filasAbonos = abonosRecibidos.map(a=>`<tr>
+      <td>${a.fecha}</td><td>Abono recibido</td><td>—</td>
+      <td class="num">${fmtMoney(a.monto)}</td><td>—</td>
+      <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${a.observaciones||''}</td></tr>`).join('');
+
+    const filasPagos = pagosHechos.map(p=>`<tr>
+      <td>${p.fecha}</td><td>Pago hecho</td><td>—</td>
+      <td class="num">${fmtMoney(p.monto)}</td><td>—</td>
+      <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${p.observaciones||''}</td></tr>`).join('');
+
+    contenido = `
+    <div class="hero-card" style="background:${(meDebeAhora-leDeboAhora)>=0?'var(--blue)':'var(--red)'};">
+      <div class="label">${historicoContactoSel}</div>
+      <div class="amount">${fmtMoney(Math.abs(meDebeAhora-leDeboAhora))}</div>
+      <div style="font-size:12.5px;opacity:.9;">
+        ${meDebeAhora>0?`Me debe ${fmtMoney(meDebeAhora)} · `:''}${leDeboAhora>0?`Le debo ${fmtMoney(leDeboAhora)}`:''}
+        ${meDebeAhora===0 && leDeboAhora===0 ? 'Sin saldos pendientes' : ''}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Resumen</div>
+      <table><tbody>
+        <tr><td>Total vendido a este contacto</td><td class="num">${fmtMoney(totalVentas)}</td></tr>
+        <tr><td>Total comprado a este contacto</td><td class="num">${fmtMoney(totalCompras)}</td></tr>
+        <tr><td>Total abonos recibidos (me pagó)</td><td class="num">${fmtMoney(totalAbonos)}</td></tr>
+        <tr><td>Total pagos hechos (le pagué)</td><td class="num">${fmtMoney(totalPagos)}</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Historial completo (más reciente primero)</div>
+      <table><thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle</th><th>Monto</th><th>Forma</th><th>Observación</th></tr></thead>
+      <tbody>${filasVentas}${filasCompras}${filasAbonos}${filasPagos}
+      ${(!ventas.length && !compras.length && !abonosRecibidos.length && !pagosHechos.length) ? '<tr><td colspan="6" class="empty">Sin movimientos con este contacto</td></tr>' : ''}
+      </tbody></table>
+    </div>`;
+  }
+
+  return `<div class="card">
+    <div class="card-title">Histórico de Compras y Ventas</div>
+    <div class="card-desc">Elige un cliente o proveedor para ver TODO lo que le has vendido, comprado, los abonos que te ha hecho y los pagos que le has hecho, con sus observaciones — todo en un solo lugar.</div>
+    <div style="padding:0 16px 16px;">
+      <select id="hist-contacto" style="width:100%; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);">
+        <option value="">-- Elige un cliente o proveedor --</option>
+        ${contactoOptions}
+      </select>
+    </div>
+  </div>
+  ${contenido}`;
+}
+
 
 function renderAsistente(){
   let html = '';
@@ -2515,16 +2700,12 @@ function renderAdministrativo(){
 
   const catOptions = CATEGORIAS_GASTO.map(c=>`<option value="${c}">${c}</option>`).join('');
 
-  // --- Proveedores (compras fiadas), agrupado por proveedor ---
+  // --- Proveedores (compras fiadas), agrupado por proveedor (ignorando mayúsculas/espacios) ---
   const comprasPendientes = comprasConSaldoPendiente();
-  const porProveedor = {};
-  comprasPendientes.forEach(e=>{
-    const key = e.proveedor || '(sin nombre)';
-    if(!porProveedor[key]) porProveedor[key] = [];
-    porProveedor[key].push(e);
-  });
-  const proveedoresList = Object.keys(porProveedor).map(nombre=>{
-    const compras = porProveedor[nombre].sort((a,b)=>a.fecha.localeCompare(b.fecha)); // más antigua primero
+  const porProveedor = agruparPorProveedor(comprasPendientes);
+  const proveedoresList = Object.keys(porProveedor).map(clave=>{
+    const nombre = porProveedor[clave].nombre;
+    const compras = porProveedor[clave].items.sort((a,b)=>a.fecha.localeCompare(b.fecha)); // más antigua primero
     const saldoTotal = compras.reduce((s,e)=>s+saldoPendienteCompra(e),0);
     return {nombre, compras, saldoTotal};
   }).sort((a,b)=> b.saldoTotal - a.saldoTotal);
@@ -2669,10 +2850,10 @@ function renderAdministrativo(){
 
   <div class="card">
     <div class="card-title">Estado de Proveedores (todos)</div>
-    <div class="card-desc">Todos los proveedores agrupados, con sus compras fiadas y pagos.</div>
+    <div class="card-desc">Todos los proveedores agrupados, con sus compras fiadas y pagos. Para descargar UN SOLO proveedor, usa el ícono 📄 junto a su nombre en la tabla de arriba.</div>
     <div style="padding:0 16px 16px; display:flex; gap:10px;">
-      <button class="export-btn" id="proveedores-excel" style="flex:1; text-align:center;">⬇ Descargar Excel</button>
-      <button class="export-btn" id="proveedores-pdf" style="flex:1; text-align:center;">⬇ Descargar PDF</button>
+      <button class="export-btn" id="proveedores-excel" style="flex:1; text-align:center;">⬇ TODOS (Excel)</button>
+      <button class="export-btn" id="proveedores-pdf" style="flex:1; text-align:center;">⬇ TODOS (PDF)</button>
     </div>
   </div>
 
@@ -3154,6 +3335,33 @@ function attachHandlers(){
     catch(e){ alert('No se pudo registrar: ' + e.message); }
   };
 
+  const cpAdd = document.getElementById('cp-add');
+  if(cpAdd) cpAdd.onclick = async ()=>{
+    const proveedor = document.getElementById('cp-proveedor').value.trim();
+    const sel = document.getElementById('cp-material');
+    const material = sel.value;
+    const unidad = sel.selectedOptions[0] ? sel.selectedOptions[0].getAttribute('data-unidad') : 'kg';
+    const fecha = document.getElementById('cp-fecha').value || todayISO();
+    const cantidad = document.getElementById('cp-cantidad').value;
+    const costoUnitario = Number(document.getElementById('cp-costo').value) || 0;
+    const formaPago = document.getElementById('cp-forma').value;
+    const observaciones = document.getElementById('cp-obs') ? document.getElementById('cp-obs').value.trim() : '';
+    if(!proveedor){ alert('Selecciona un proveedor primero.'); return; }
+    if(!material || !cantidad) return;
+    const costoTotal = Number(cantidad)*costoUnitario;
+    try{
+      const numeroRecibido = await obtenerSiguienteNumeroRecibido();
+      await db.collection('entradas').add({material, unidad, fecha, cantidad:Number(cantidad), costoUnitario, costoTotal, formaPago, proveedor, observaciones, numeroRecibido, creadoPor: myNombre});
+      if(costoTotal>0 && formaPago==='efectivo'){
+        await db.collection('cuadreCaja').add({fecha, tipo:'Salida', concepto:`Compra: ${material} (${proveedor})`, monto:costoTotal});
+      }
+      document.getElementById('cp-cantidad').value = '';
+      document.getElementById('cp-costo').value = '';
+      document.getElementById('cp-obs').value = '';
+    }
+    catch(e){ alert('No se pudo registrar la compra: ' + e.message); }
+  };
+
   document.querySelectorAll('[data-editar-entrada]').forEach(btn=>{
     btn.onclick = ()=>{ editandoEntradaId = btn.getAttribute('data-editar-entrada'); render(); };
   });
@@ -3541,6 +3749,9 @@ function attachHandlers(){
   const conciliacionPdf = document.getElementById('conciliacion-pdf');
   if(conciliacionPdf) conciliacionPdf.onclick = ()=>{ try{ exportConciliacionPDF(); }catch(e){ alert('No se pudo exportar: ' + e.message); } };
 
+  const histContactoSel = document.getElementById('hist-contacto');
+  if(histContactoSel) histContactoSel.onchange = ()=>{ historicoContactoSel = histContactoSel.value; render(); };
+
   document.querySelectorAll('[data-toggle-conc]').forEach(td=>{
     td.onclick = ()=>{
       const nombre = td.getAttribute('data-toggle-conc');
@@ -3564,6 +3775,7 @@ function attachHandlers(){
   document.querySelectorAll('[data-pagarprov-nombre]').forEach(btn=>{
     btn.onclick = async ()=>{
       const proveedor = btn.getAttribute('data-pagarprov-nombre');
+      const proveedorClave = normalizarNombre(proveedor);
       const inputId = 'pagoprov-monto-' + proveedor.replace(/[^a-zA-Z0-9]/g,'');
       const input = document.getElementById(inputId);
       const monto = Number(input.value);
@@ -3571,7 +3783,7 @@ function attachHandlers(){
       const observaciones = obsInput ? obsInput.value.trim() : '';
       if(!monto || monto<=0) return;
       try{
-        const pendientes = comprasConSaldoPendiente().filter(e=>(e.proveedor||'(sin nombre)')===proveedor).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+        const pendientes = comprasConSaldoPendiente().filter(e=>normalizarNombre(e.proveedor||'(sin nombre)')===proveedorClave).sort((a,b)=>a.fecha.localeCompare(b.fecha));
         let restante = monto;
         for(const entrada of pendientes){
           if(restante<=0) break;
