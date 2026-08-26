@@ -1441,7 +1441,12 @@ function renderInventario(){
               <option value="credito" ${e.formaPago==='credito'?'selected':''}>Fiado</option>
             </select>
           </div>
-          <div><label>Proveedor</label><input id="edit-e-proveedor" value="${e.proveedor||''}"></div>
+          <div><label>Proveedor</label>
+            <select id="edit-e-proveedor">
+              <option value="">-- Sin proveedor / efectivo --</option>
+              ${state.proveedoresCatalogo.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>`<option value="${p.nombre}" ${p.nombre===e.proveedor?'selected':''}>${p.nombre}</option>`).join('')}
+            </select>
+          </div>
           <div class="full"><label>Observaciones</label><input id="edit-e-obs" value="${e.observaciones||''}"></div>
           <button class="add-btn" data-guardar-entrada="${e.id}" style="grid-column:1/-1;">Guardar</button>
           <button class="export-btn" data-cancelar-entrada style="grid-column:1/-1;">Cancelar</button>
@@ -1483,7 +1488,13 @@ function renderInventario(){
           <option value="credito">Fiado (le debo al proveedor)</option>
         </select>
       </div>
-      <div><label>Proveedor (si es fiado)</label><input id="e-proveedor" placeholder="Ej: Distribuidora ABC"></div>
+      <div><label>Proveedor (si es fiado)</label>
+        <select id="e-proveedor">
+          <option value="">-- Sin proveedor / efectivo --</option>
+          ${state.proveedoresCatalogo.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>`<option value="${p.nombre}">${p.nombre}</option>`).join('')}
+        </select>
+        <div style="font-size:11px; color:var(--ink-soft); margin-top:4px;">¿No aparece? Créalo primero en Administrativo → Catálogo de Proveedores.</div>
+      </div>
       <div class="full"><label>Observaciones (opcional)</label><input id="e-obs" placeholder="Ej: llegó con 2 rollos dañados"></div>
       <button class="add-btn" id="e-add">+ Registrar entrada</button>
     </div>` : '';
@@ -2787,6 +2798,49 @@ function renderAsistenteUltimosMovimientos(){
   </div>`;
 }
 
+// ---------- Unificación de nombres duplicados (limpieza de datos real) ----------
+function gruposDeDuplicados(){
+  const conteo = {}; // clave normalizada -> { variante: cantidad_apariciones }
+  const registrar = (nombre)=>{
+    if(!nombre) return;
+    const clave = normalizarNombre(nombre);
+    conteo[clave] = conteo[clave] || {};
+    conteo[clave][nombre] = (conteo[clave][nombre]||0) + 1;
+  };
+  state.clientes.forEach(c=>registrar(c.nombre));
+  state.proveedoresCatalogo.forEach(p=>registrar(p.nombre));
+  state.ventas.forEach(v=>registrar(v.cliente));
+  state.entradas.forEach(e=>registrar(e.proveedor));
+  state.abonos.forEach(a=>registrar(a.cliente));
+  state.pagosProveedor.forEach(p=>registrar(p.proveedor));
+
+  return Object.keys(conteo)
+    .map(clave=>{
+      const variantes = Object.keys(conteo[clave]);
+      const canonico = variantes.sort((a,b)=>conteo[clave][b]-conteo[clave][a])[0];
+      return { clave, variantes, canonico, totalOcurrencias: variantes.reduce((s,v)=>s+conteo[clave][v],0) };
+    })
+    .filter(g=>g.variantes.length>1)
+    .sort((a,b)=>b.totalOcurrencias - a.totalOcurrencias);
+}
+
+async function unificarNombre(variantes, nombreCanonico){
+  const batch = db.batch();
+  let cambios = 0;
+  const esVariante = (nombre)=> variantes.includes(nombre) && nombre!==nombreCanonico;
+
+  state.clientes.forEach(c=>{ if(esVariante(c.nombre)){ batch.update(db.collection('clientes').doc(c.id), {nombre:nombreCanonico}); cambios++; } });
+  state.proveedoresCatalogo.forEach(p=>{ if(esVariante(p.nombre)){ batch.update(db.collection('proveedores').doc(p.id), {nombre:nombreCanonico}); cambios++; } });
+  state.ventas.forEach(v=>{ if(esVariante(v.cliente)){ batch.update(db.collection('ventas').doc(v.id), {cliente:nombreCanonico}); cambios++; } });
+  state.entradas.forEach(e=>{ if(esVariante(e.proveedor)){ batch.update(db.collection('entradas').doc(e.id), {proveedor:nombreCanonico}); cambios++; } });
+  state.abonos.forEach(a=>{ if(esVariante(a.cliente)){ batch.update(db.collection('abonos').doc(a.id), {cliente:nombreCanonico}); cambios++; } });
+  state.pagosProveedor.forEach(p=>{ if(esVariante(p.proveedor)){ batch.update(db.collection('pagosProveedor').doc(p.id), {proveedor:nombreCanonico}); cambios++; } });
+
+  if(cambios===0) return 0;
+  await batch.commit();
+  return cambios;
+}
+
 function renderAdministrativo(){
   const canEdit = myRole==='admin' || myRole==='administrativo';
   const soloAdmin = myRole==='admin';
@@ -2911,7 +2965,26 @@ function renderAdministrativo(){
   </tr>`).join('');
   if(!cuadreRows) cuadreRows = `<tr><td colspan="5" class="empty">Sin movimientos registrados aún</td></tr>`;
 
-  return renderAsistente() + `<div class="card">
+  // --- Nombres duplicados (Phoenix / PHOENIX / phoenix, etc.) ---
+  const duplicados = soloAdmin ? gruposDeDuplicados() : [];
+  window.__nuvoraDuplicadosActuales = duplicados;
+  const duplicadosCard = duplicados.length ? `
+  <div class="card">
+    <div class="card-title">⚠️ Nombres Duplicados Encontrados</div>
+    <div class="card-desc">Estos contactos están escritos de varias formas en tus registros (mayúsculas, espacios, etc.). Al unificar, TODOS los movimientos (ventas, compras, abonos, pagos) quedan con el mismo nombre exacto, permanentemente.</div>
+    ${duplicados.map((g,idx)=>`
+      <div style="padding:10px 16px; border-top:1px solid var(--line);">
+        <div style="font-size:12px; color:var(--ink-soft); margin-bottom:4px;">Variantes encontradas: ${g.variantes.join(' · ')}</div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <select id="dup-canonico-${idx}" style="flex:1; min-width:150px; font-size:13px; padding:7px; border:1px solid var(--line); border-radius:4px;">
+            ${g.variantes.map(v=>`<option value="${v}" ${v===g.canonico?'selected':''}>${v}</option>`).join('')}
+          </select>
+          <button class="add-btn" data-unificar="${idx}" style="padding:7px 12px; font-size:12px; margin-top:0;">✓ Unificar</button>
+        </div>
+      </div>`).join('')}
+  </div>` : '';
+
+  return renderAsistente() + duplicadosCard + `<div class="card">
     <div class="card-title">Cuadre de Caja</div>
     <div class="card-desc">Busca por fecha, tipo o concepto para ver un movimiento.</div>
     <div style="padding:0 16px 12px;"><input type="text" placeholder="🔍 Buscar movimiento..." data-search-input="cuadre" style="width:100%; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);"></div>
@@ -3632,6 +3705,8 @@ function attachHandlers(){
     const email = document.getElementById('c-email') ? document.getElementById('c-email').value.trim() : '';
     const direccion = document.getElementById('c-direccion') ? document.getElementById('c-direccion').value.trim() : '';
     if(!nombre) return;
+    const yaExiste = state.clientes.some(c=>normalizarNombre(c.nombre)===normalizarNombre(nombre));
+    if(yaExiste){ alert(`Ya existe un cliente con ese nombre (o muy parecido): "${nombre}". Búscalo en la lista en vez de crear uno nuevo, para evitar duplicados.`); return; }
     try{ await db.collection('clientes').add({nombre, telefono, documento, email, direccion}); }
     catch(e){ alert('No se pudo agregar el cliente: ' + e.message); }
   };
@@ -3667,6 +3742,8 @@ function attachHandlers(){
     const email = document.getElementById('pr-email') ? document.getElementById('pr-email').value.trim() : '';
     const direccion = document.getElementById('pr-direccion') ? document.getElementById('pr-direccion').value.trim() : '';
     if(!nombre) return;
+    const yaExiste = state.proveedoresCatalogo.some(p=>normalizarNombre(p.nombre)===normalizarNombre(nombre));
+    if(yaExiste){ alert(`Ya existe un proveedor con ese nombre (o muy parecido): "${nombre}". Búscalo en la lista en vez de crear uno nuevo, para evitar duplicados.`); return; }
     try{ await db.collection('proveedores').add({nombre, telefono, documento, email, direccion}); }
     catch(e){ alert('No se pudo agregar el proveedor: ' + e.message); }
   };
@@ -3956,6 +4033,20 @@ function attachHandlers(){
   if(historicoPdf) historicoPdf.onclick = ()=>{ try{ exportHistoricoPDF(historicoContactoSel, historicoDesde, historicoHasta); }catch(e){ alert('No se pudo exportar: ' + e.message); } };
 
   const cfAdd = document.getElementById('cf-add');
+  document.querySelectorAll('[data-unificar]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const idx = Number(btn.getAttribute('data-unificar'));
+      const grupo = (window.__nuvoraDuplicadosActuales||[])[idx];
+      if(!grupo) return;
+      const sel = document.getElementById('dup-canonico-'+idx);
+      const nombreElegido = sel ? sel.value : grupo.canonico;
+      if(!confirm(`Vas a unificar ${grupo.variantes.length} variantes en "${nombreElegido}". Esto cambia TODOS los registros existentes permanentemente. ¿Continuar?`)) return;
+      try{
+        const cambios = await unificarNombre(grupo.variantes, nombreElegido);
+        alert(`Listo, se actualizaron ${cambios} registros a "${nombreElegido}".`);
+      }catch(e){ alert('No se pudo unificar: ' + e.message); }
+    };
+  });
   if(cfAdd) cfAdd.onclick = async ()=>{
     const concepto = document.getElementById('cf-concepto').value.trim();
     const monto = Number(document.getElementById('cf-monto').value);
