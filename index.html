@@ -424,6 +424,7 @@ const ALL_TABS = [
   {id:'historico', label:'Histórico'},
   {id:'administrativo', label:'Administrativo'},
   {id:'finanzas', label:'Finanzas'},
+  {id:'equilibrio', label:'Punto de Equilibrio'},
 ];
 
 function getTabsForCurrentUser(){
@@ -582,7 +583,7 @@ function startListeners(){
     render();
   }));
   unsubscribers.push(db.collection('settings').doc('config').onSnapshot(doc=>{
-    if(doc.exists) state.settings = Object.assign({precioCm:0, cmPorBloque:100, precioParrilla:0}, doc.data());
+    if(doc.exists) state.settings = Object.assign({precioCm:0, cmPorBloque:100, precioParrilla:0, costosFijos:[]}, doc.data());
     render();
   }));
   unsubscribers.push(db.collection('clientes').onSnapshot(snap=>{
@@ -961,6 +962,7 @@ function renderPanels(){
   if(activeTab==='historico') div.innerHTML = renderHistorico();
   if(activeTab==='administrativo') div.innerHTML = renderAdministrativo();
   if(activeTab==='finanzas') div.innerHTML = renderFinanzas();
+  if(activeTab==='equilibrio') div.innerHTML = renderEquilibrio();
   if(activeTab==='usuarios') div.innerHTML = renderUsuarios();
   panels.appendChild(div);
   if(activeTab==='materiales') initMaterialesChart();
@@ -2517,15 +2519,31 @@ function exportHistoricoPDF(nombreContacto, desde, hasta){
   downloadOrShareBlob(pdfBlob, `nuvora-historico-${nombreContacto.replace(/[^a-zA-Z0-9]/g,'-')}-${todayISO()}.pdf`, 'application/pdf');
 }
 
+// Une varias listas de nombres y devuelve nombres únicos ignorando mayúsculas/espacios,
+// conservando la capitalización que más se repite entre todas las fuentes.
+function nombresUnicosNormalizados(...listasDeNombres){
+  const conteo = {};
+  listasDeNombres.flat().forEach(nombre=>{
+    if(!nombre) return;
+    const clave = normalizarNombre(nombre);
+    conteo[clave] = conteo[clave] || {};
+    conteo[clave][nombre] = (conteo[clave][nombre]||0) + 1;
+  });
+  return Object.keys(conteo).map(clave=>{
+    const opciones = conteo[clave];
+    return Object.keys(opciones).sort((a,b)=>opciones[b]-opciones[a])[0];
+  }).sort((a,b)=>a.localeCompare(b));
+}
+
 // ---------- Histórico de Compras y Ventas (todo lo que le compré/vendí/abonó/pagó a un contacto) ----------
 function renderHistorico(){
   const nombresClientes = state.clientes.map(c=>c.nombre);
-  const nombresProveedores = [...new Set([
+  const nombresProveedores = [
     ...state.proveedoresCatalogo.map(p=>p.nombre),
     ...state.entradas.filter(e=>e.proveedor).map(e=>e.proveedor)
-  ])];
-  const todosContactos = [...new Set([...nombresClientes, ...nombresProveedores])].sort((a,b)=>a.localeCompare(b));
-  const contactoOptions = todosContactos.map(n=>`<option value="${n}" ${n===historicoContactoSel?'selected':''}>${n}</option>`).join('');
+  ];
+  const todosContactos = nombresUnicosNormalizados(nombresClientes, nombresProveedores);
+  const contactoOptions = todosContactos.map(n=>`<option value="${n}" ${normalizarNombre(n)===normalizarNombre(historicoContactoSel)?'selected':''}>${n}</option>`).join('');
 
   let contenido = `<div class="empty" style="padding:0 16px 16px;">Elige un contacto arriba para ver su historial completo.</div>`;
 
@@ -2975,7 +2993,96 @@ function renderAdministrativo(){
   </div></div>`;
 }
 
+// ---------- Punto de Equilibrio ----------
+function renderEquilibrio(){
+  const canEdit = myRole==='admin' || myRole==='administrativo';
+  const costosFijos = state.settings.costosFijos || [];
+  const totalCostosFijos = costosFijos.reduce((s,c)=>s+Number(c.monto||0),0);
+
+  const filasCostos = costosFijos.map((c,idx)=>`
+    <tr>
+      <td>${c.concepto}</td>
+      <td class="num">${fmtMoney(c.monto)}</td>
+      <td>${canEdit?`<button class="del-btn" data-quitar-costofijo="${idx}">✕</button>`:''}</td>
+    </tr>`).join('');
+
+  // --- Cásata (venta por cm) ---
+  const precioCm = Number(state.settings.precioCm||0);
+  const costoCm = costoPorCm();
+  const margenCm = precioCm - costoCm;
+  const equilibrioCasataCm = margenCm>0 ? totalCostosFijos/margenCm : null;
+  const equilibrioCasataBloques = equilibrioCasataCm!==null ? equilibrioCasataCm/(Number(state.settings.cmPorBloque)||100) : null;
+
+  // --- Parrillas (por talla, usando precios de venta actuales del catálogo) ---
+  const filasParrillas = TALLAS_PARRILLA.map(talla=>{
+    const medida = TALLA_A_MEDIDA_PARRILLA[talla];
+    const precioVenta = PRECIOS_PRODUCTOS.parrilla_estandar.opciones[medida] || Number(state.settings.precioParrilla||0);
+    const costoUnitario = costoPorUnidadParrilla(talla);
+    const margen = precioVenta - costoUnitario;
+    const unidadesEquilibrio = margen>0 ? totalCostosFijos/margen : null;
+    return `<tr>
+      <td>Parrilla ${talla}</td>
+      <td class="num">${fmtMoney(precioVenta)}</td>
+      <td class="num">${fmtMoney(costoUnitario)}</td>
+      <td class="num">${fmtMoney(margen)}</td>
+      <td class="num" style="font-weight:700;">${margen>0 ? Math.ceil(unidadesEquilibrio)+' und/mes' : 'Sin margen'}</td>
+    </tr>`;
+  }).join('');
+
+  const formCostoFijo = canEdit ? `
+    <div class="form-grid">
+      <div class="full"><label>Concepto (ej: Arriendo, Nómina, Servicios)</label><input id="cf-concepto" placeholder="Ej: Arriendo bodega"></div>
+      <div><label>Monto mensual ($)</label><input id="cf-monto" type="number" step="any"></div>
+      <button class="add-btn" id="cf-add">+ Agregar costo fijo</button>
+    </div>` : '';
+
+  return `<div class="hero-card" style="background:var(--blue);">
+    <div class="label">Costos fijos mensuales</div>
+    <div class="amount">${fmtMoney(totalCostosFijos)}</div>
+    <div style="font-size:12.5px;opacity:.9;">Esto es lo mínimo que necesitas vender cada mes solo para cubrir gastos fijos (antes de tener ganancia)</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Costos Fijos Mensuales</div>
+    <div class="card-desc">Arriendo, salarios, prestaciones, servicios — todo lo que pagas SIN importar cuánto vendas. Esta lista es la base del cálculo de punto de equilibrio.</div>
+    <table><thead><tr><th>Concepto</th><th>Monto</th><th></th></tr></thead>
+    <tbody>${filasCostos || '<tr><td colspan="3" class="empty">Agrega tus costos fijos abajo</td></tr>'}
+      <tr style="font-weight:700;"><td>TOTAL MENSUAL</td><td class="num">${fmtMoney(totalCostosFijos)}</td><td></td></tr>
+    </tbody></table>
+    ${formCostoFijo}
+  </div>
+
+  <div class="card">
+    <div class="card-title">Punto de Equilibrio — Cásata</div>
+    <div class="card-desc">Cuántos centímetros (o bloques) de cásata necesitas vender al mes solo para cubrir los costos fijos, según tu precio y costo por cm actuales.</div>
+    <table><tbody>
+      <tr><td>Precio de venta por cm</td><td class="num">${fmtMoney(precioCm)}</td></tr>
+      <tr><td>Costo por cm</td><td class="num">${fmtMoney(costoCm)}</td></tr>
+      <tr><td>Margen de contribución por cm</td><td class="num" style="font-weight:700;">${fmtMoney(margenCm)}</td></tr>
+    </tbody></table>
+    ${margenCm>0 ? `
+    <div style="padding:12px 16px; background:var(--paper); margin:0 16px 16px; border-radius:6px; text-align:center;">
+      <div style="font-size:11px; color:var(--ink-soft);">Punto de equilibrio mensual</div>
+      <div style="font-size:20px; font-weight:700;">${Math.ceil(equilibrioCasataCm).toLocaleString('es-CO')} cm</div>
+      <div style="font-size:12px; color:var(--ink-soft);">≈ ${Math.ceil(equilibrioCasataBloques)} bloques de cásata</div>
+    </div>` : `<div class="empty" style="padding:0 16px 16px;">Configura el precio por cm en Configuración para calcular esto.</div>`}
+  </div>
+
+  <div class="card">
+    <div class="card-title">Punto de Equilibrio — Parrillas</div>
+    <div class="card-desc">Unidades que debes vender de cada talla al mes para cubrir SOLO con esa talla el total de costos fijos (referencia — en la práctica el peso se reparte entre varios productos).</div>
+    <table><thead><tr><th>Talla</th><th>Precio</th><th>Costo</th><th>Margen</th><th>Equilibrio</th></tr></thead>
+    <tbody>${filasParrillas}</tbody></table>
+  </div>
+
+  <div class="card">
+    <div class="card-desc" style="padding:16px;">💡 <strong>Nota:</strong> este cálculo asume que un solo producto cubre todos los costos fijos por sí solo — es una referencia rápida por línea. Si vendes varios productos a la vez, en la realidad los costos fijos se reparten entre todos ellos, así que el equilibrio real se alcanza más rápido que lo que muestra cada tabla por separado.</div>
+  </div>`;
+}
+
+// ---------- Finanzas ----------
 function renderFinanzas(){
+  const canEdit = myRole==='admin' || myRole==='administrativo';
   const pl = calcularPL(mesInforme);
   const stockTerminado = stockCasataTerminada();
   const valorTerminado = stockTerminado * costoPorCm();
@@ -3847,6 +3954,24 @@ function attachHandlers(){
 
   const historicoPdf = document.getElementById('historico-pdf');
   if(historicoPdf) historicoPdf.onclick = ()=>{ try{ exportHistoricoPDF(historicoContactoSel, historicoDesde, historicoHasta); }catch(e){ alert('No se pudo exportar: ' + e.message); } };
+
+  const cfAdd = document.getElementById('cf-add');
+  if(cfAdd) cfAdd.onclick = async ()=>{
+    const concepto = document.getElementById('cf-concepto').value.trim();
+    const monto = Number(document.getElementById('cf-monto').value);
+    if(!concepto || !monto) return;
+    const nuevaLista = [...(state.settings.costosFijos||[]), {concepto, monto}];
+    try{ await db.collection('settings').doc('config').set({costosFijos: nuevaLista}, {merge:true}); }
+    catch(e){ alert('No se pudo guardar: ' + e.message); }
+  };
+  document.querySelectorAll('[data-quitar-costofijo]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const idx = Number(btn.getAttribute('data-quitar-costofijo'));
+      const nuevaLista = (state.settings.costosFijos||[]).filter((_,i)=>i!==idx);
+      try{ await db.collection('settings').doc('config').set({costosFijos: nuevaLista}, {merge:true}); }
+      catch(e){ alert('No se pudo eliminar: ' + e.message); }
+    };
+  });
 
   document.querySelectorAll('[data-toggle-conc]').forEach(td=>{
     td.onclick = ()=>{
