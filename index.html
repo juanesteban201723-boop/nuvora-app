@@ -414,7 +414,6 @@ const ALL_TABS = [
   {id:'formula', label:'Fórmula Casata'},
   {id:'formulaParrillas', label:'Fórmula Parrillas'},
   {id:'inventario', label:'Cargar Inventario'},
-  {id:'compras', label:'Compras'},
   {id:'produccion', label:'Producción Casata'},
   {id:'produccionParrillas', label:'Producción Parrillas'},
   {id:'ventas', label:'Ventas'},
@@ -430,7 +429,7 @@ const ALL_TABS = [
 function getTabsForCurrentUser(){
   if(myRole==='admin') return [...ALL_TABS, {id:'usuarios', label:'Usuarios'}];
   if(myRole==='produccion') return [{id:'produccion', label:'Producción Casata'}, {id:'produccionParrillas', label:'Producción Parrillas'}];
-  if(myRole==='inventario') return [{id:'inventario', label:'Cargar Inventario'}, {id:'compras', label:'Compras'}];
+  if(myRole==='inventario') return [{id:'inventario', label:'Cargar Inventario'}];
   if(myRole==='administrativo') return ALL_TABS.filter(t=>myPermisos.includes(t.id));
   return [];
 }
@@ -951,7 +950,6 @@ function renderPanels(){
   if(activeTab==='materiales') div.innerHTML = renderMateriales();
   if(activeTab==='formula') div.innerHTML = renderFormula();
   if(activeTab==='inventario') div.innerHTML = renderInventario();
-  if(activeTab==='compras') div.innerHTML = renderCompras();
   if(activeTab==='produccion') div.innerHTML = renderProduccion();
   if(activeTab==='produccionParrillas') div.innerHTML = renderProduccionParrillas();
   if(activeTab==='formulaParrillas') div.innerHTML = renderFormulaParrillas();
