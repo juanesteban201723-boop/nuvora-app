@@ -244,7 +244,7 @@ async function obtenerSiguienteNumeroRemision(){
     nuevoNumero = actual + 1;
     t.set(ref, {ultimoNumeroRemision: nuevoNumero}, {merge:true});
   });
-  return nuevoNumero;
+  return 'V' + nuevoNumero;
 }
 
 async function obtenerSiguienteNumeroRecibido(){
@@ -256,7 +256,7 @@ async function obtenerSiguienteNumeroRecibido(){
     nuevoNumero = actual + 1;
     t.set(ref, {ultimoNumeroRecibido: nuevoNumero}, {merge:true});
   });
-  return nuevoNumero;
+  return 'C' + nuevoNumero;
 }
 
 let currentUser = null;   // {uid, email}
@@ -268,9 +268,11 @@ let state = {
   materiales: [],
   formula: [],
   formulaParrillas: [],
+  formulaColchones: [],
   entradas: [],
   produccion: [],
   produccionParrillas: [],
+  produccionColchones: [],
   usuarios: [],
   clientes: [],
   proveedoresCatalogo: [],
@@ -296,6 +298,8 @@ let editandoEntradaId = null;
 let editandoVentaId = null;
 let editandoClienteId = null;
 let editandoProveedorId = null;
+let ordenProveedores = 'monto';
+let editandoContactoNombre = null;
 let editandoMaterialId = null;
 let editandoProduccionId = null;
 let editandoProduccionParrillaId = null;
@@ -411,24 +415,25 @@ const TALLA_A_MEDIDA_PARRILLA = { '1.00':'100x190', '1.40':'140x190', '1.60':'16
 const ALL_TABS = [
   {id:'dashboard', label:'Dashboard'},
   {id:'materiales', label:'Materiales'},
-  {id:'formula', label:'Fórmula Casata'},
-  {id:'formulaParrillas', label:'Fórmula Parrillas'},
+  {id:'formulas', label:'Fórmulas'},
   {id:'inventario', label:'Cargar Inventario'},
   {id:'produccion', label:'Producción Casata'},
   {id:'produccionParrillas', label:'Producción Parrillas'},
+  {id:'produccionEnsamblador', label:'Producción Ensamblador'},
   {id:'ventas', label:'Ventas'},
-  {id:'clientes', label:'Clientes'},
+  {id:'contactos', label:'Clientes / Proveedores / Otros'},
   {id:'cartera', label:'Cartera'},
   {id:'consolidacion', label:'Consolidación de Cartera'},
   {id:'historico', label:'Histórico'},
   {id:'administrativo', label:'Administrativo'},
+  {id:'gastos', label:'Gastos'},
   {id:'finanzas', label:'Finanzas'},
-  {id:'equilibrio', label:'Punto de Equilibrio'},
+  {id:'reportes', label:'Reportes'},
 ];
 
 function getTabsForCurrentUser(){
   if(myRole==='admin') return [...ALL_TABS, {id:'usuarios', label:'Usuarios'}];
-  if(myRole==='produccion') return [{id:'produccion', label:'Producción Casata'}, {id:'produccionParrillas', label:'Producción Parrillas'}];
+  if(myRole==='produccion') return [{id:'produccion', label:'Producción Casata'}, {id:'produccionParrillas', label:'Producción Parrillas'}, {id:'produccionEnsamblador', label:'Producción Ensamblador'}];
   if(myRole==='inventario') return [{id:'inventario', label:'Cargar Inventario'}];
   if(myRole==='administrativo') return ALL_TABS.filter(t=>myPermisos.includes(t.id));
   return [];
@@ -569,6 +574,10 @@ function startListeners(){
     state.formulaParrillas = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   }));
+  unsubscribers.push(db.collection('formulaColchones').onSnapshot(snap=>{
+    state.formulaColchones = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    render();
+  }));
   unsubscribers.push(db.collection('entradas').orderBy('fecha','desc').onSnapshot(snap=>{
     state.entradas = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
@@ -581,8 +590,12 @@ function startListeners(){
     state.produccionParrillas = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   }));
+  unsubscribers.push(db.collection('produccionColchones').orderBy('fecha','desc').onSnapshot(snap=>{
+    state.produccionColchones = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    render();
+  }));
   unsubscribers.push(db.collection('settings').doc('config').onSnapshot(doc=>{
-    if(doc.exists) state.settings = Object.assign({precioCm:0, cmPorBloque:100, precioParrilla:0, costosFijos:[]}, doc.data());
+    if(doc.exists) state.settings = Object.assign({precioCm:0, cmPorBloque:100, precioParrilla:0, costosFijos:[], metas:{}}, doc.data());
     render();
   }));
   unsubscribers.push(db.collection('clientes').onSnapshot(snap=>{
@@ -678,6 +691,29 @@ function produccionParrillasPosible(talla){
     if(min===null || unidades < min){ min = unidades; limitante = r.material; }
   }
   return {unidades: min, limitante};
+}
+
+function produccionColchonPosible(tipoColchon, medida){
+  let min = null, limitante = null;
+  const filas = state.formulaColchones.filter(r=>r.tipoColchon===tipoColchon && r.medida===medida);
+  for(const r of filas){
+    const stock = stockMaterial(r.material);
+    const cantPorUnidad = Number(r.cantidadPorUnidad);
+    if(!cantPorUnidad) continue;
+    const unidades = stock / cantPorUnidad;
+    if(min===null || unidades < min){ min = unidades; limitante = r.material; }
+  }
+  return {unidades: min, limitante};
+}
+
+function stockColchonesTerminados(tipoColchon, medida){
+  const totalProducido = state.produccionColchones.filter(p=>p.tipoColchon===tipoColchon && p.medida===medida).reduce((s,p)=>s+Number(p.unidades||0),0);
+  const totalVendido = state.ventas.filter(v=>v.producto===tipoColchon && v.medida===medida).reduce((s,v)=>s+1,0); // colchones se venden por unidad
+  return totalProducido - totalVendido;
+}
+
+function costoPorUnidadColchon(tipoColchon, medida){
+  return state.formulaColchones.filter(r=>r.tipoColchon===tipoColchon && r.medida===medida).reduce((s,r)=> s + costoPromedio(r.material) * (Number(r.cantidadPorUnidad)||0), 0);
 }
 
 function stockParrillasTerminadas(talla){
@@ -948,23 +984,25 @@ function renderPanels(){
   div.className = 'panel active';
   if(activeTab==='dashboard') div.innerHTML = renderDashboard();
   if(activeTab==='materiales') div.innerHTML = renderMateriales();
-  if(activeTab==='formula') div.innerHTML = renderFormula();
+  if(activeTab==='formulas') div.innerHTML = renderFormulas();
   if(activeTab==='inventario') div.innerHTML = renderInventario();
   if(activeTab==='produccion') div.innerHTML = renderProduccion();
   if(activeTab==='produccionParrillas') div.innerHTML = renderProduccionParrillas();
-  if(activeTab==='formulaParrillas') div.innerHTML = renderFormulaParrillas();
+  if(activeTab==='produccionEnsamblador') div.innerHTML = renderProduccionEnsamblador();
   if(activeTab==='ventas') div.innerHTML = renderVentas();
-  if(activeTab==='clientes') div.innerHTML = renderClientes();
+  if(activeTab==='contactos') div.innerHTML = renderContactos();
   if(activeTab==='cartera') div.innerHTML = renderCartera();
   if(activeTab==='consolidacion') div.innerHTML = renderConsolidacionCartera();
   if(activeTab==='historico') div.innerHTML = renderHistorico();
   if(activeTab==='administrativo') div.innerHTML = renderAdministrativo();
+  if(activeTab==='gastos') div.innerHTML = renderGastos();
   if(activeTab==='finanzas') div.innerHTML = renderFinanzas();
-  if(activeTab==='equilibrio') div.innerHTML = renderEquilibrio();
+  if(activeTab==='reportes') div.innerHTML = renderReportes();
   if(activeTab==='usuarios') div.innerHTML = renderUsuarios();
   panels.appendChild(div);
   if(activeTab==='materiales') initMaterialesChart();
   if(activeTab==='finanzas'){ initPLChart(); initBalanceChart(); initReporteChart(); }
+  if(activeTab==='reportes') initReportesProductoChart();
   attachHandlers();
   attachSearchFilters();
 }
@@ -1014,6 +1052,11 @@ function renderDashboard(){
   }
 
   html += `<div class="hero-card">
+    <div class="label">Valor total del inventario de materiales</div>
+    <div class="amount">${fmtMoney(valorInventarioTotal())}</div>
+  </div>`;
+
+  html += `<div class="hero-card">
     <div class="label">Cm de casata producibles hoy</div>
     <div class="amount">${cm===null?'—':fmt(cm)} cm</div>
     ${limitante ? `<div class="limit">Limitado por: <strong>${limitante}</strong></div>` : ''}
@@ -1025,6 +1068,21 @@ function renderDashboard(){
     <div class="balance-grid">${tallasConFormula.map(t=>{
       const {unidades, limitante} = produccionParrillasPosible(t);
       return `<div class="balance-card"><div class="label">Talla ${t}</div><div class="val">${unidades===null?'—':fmt(unidades)} un.</div>
+        <div style="font-size:10.5px;color:var(--ink-soft);margin-top:2px;">Limitado por: ${limitante||'—'}</div></div>`;
+    }).join('')}</div>`;
+  }
+
+  const colchonesConFormula = [];
+  ['colchon_resorte','colchon_ortopedico'].forEach(tipo=>{
+    TALLAS_PARRILLA.forEach(medida=>{
+      if(state.formulaColchones.some(f=>f.tipoColchon===tipo && f.medida===medida)) colchonesConFormula.push({tipo, medida});
+    });
+  });
+  if(colchonesConFormula.length>0){
+    html += `<div class="section-h">Colchones — producibles hoy</div>
+    <div class="balance-grid">${colchonesConFormula.map(({tipo,medida})=>{
+      const {unidades, limitante} = produccionColchonPosible(tipo, medida);
+      return `<div class="balance-card"><div class="label">${tipo==='colchon_resorte'?'Resorte':'Ortopédico'} ${medida}</div><div class="val">${unidades===null?'—':fmt(unidades)} un.</div>
         <div style="font-size:10.5px;color:var(--ink-soft);margin-top:2px;">Limitado por: ${limitante||'—'}</div></div>`;
     }).join('')}</div>`;
   }
@@ -1191,6 +1249,9 @@ function initMaterialesChart(){
   }
 }
 
+let formulaSeccionActiva = 'casata';
+let editandoFormulaColchonId = null;
+
 function renderFormula(){
   const canEdit = myRole==='admin';
   let rows = state.formula.map(f=>{
@@ -1284,6 +1345,78 @@ function renderFormulaParrillas(){
   </div>`;
 }
 
+function renderFormulaColchones(){
+  const canEdit = myRole==='admin';
+  const medidaOptions = TALLAS_PARRILLA.map(t=>`<option value="${t}">${t}</option>`).join('');
+  const tipoColchonOptions = `<option value="colchon_resorte">Colchón de Resorte</option><option value="colchon_ortopedico">Colchón Ortopédico</option>`;
+  const materialOptions = state.materiales.map(m=>`<option value="${m.nombre}">${m.nombre} (${m.unidad||'kg'})</option>`).join('');
+
+  let bloques = ['colchon_resorte','colchon_ortopedico'].map(tipo=>{
+    const bloquesPorMedida = TALLAS_PARRILLA.map(medida=>{
+      const filas = state.formulaColchones.filter(f=>f.tipoColchon===tipo && f.medida===medida);
+      if(filas.length===0) return '';
+      let filaRows = filas.map(f=>{
+        const mat = state.materiales.find(m=>m.nombre===f.material);
+        const unidad = mat ? (mat.unidad||'kg') : '';
+        let filaEdicion = '';
+        if(editandoFormulaColchonId===f.id){
+          filaEdicion = `<tr><td colspan="3" style="background:var(--paper);">
+            <div class="form-grid">
+              <div class="full"><label>Cantidad por unidad (${f.material})</label><input id="edit-fc-cant" type="number" step="any" value="${f.cantidadPorUnidad}"></div>
+              <button class="add-btn" data-guardar-formula-colchon="${f.id}" style="grid-column:1/-1;">Guardar</button>
+              <button class="export-btn" data-cancelar-formula-colchon style="grid-column:1/-1;">Cancelar</button>
+            </div>
+          </td></tr>`;
+        }
+        return `<tr>
+          <td>${f.material}</td>
+          <td class="num">${fmt(f.cantidadPorUnidad)} ${unidad}</td>
+          <td>${canEdit ? `<button class="del-btn" data-editar-formula-colchon="${f.id}" title="Editar">✏️</button><button class="del-btn" data-del-col="formulaColchones" data-id="${f.id}">✕</button>` : ''}</td>
+        </tr>${filaEdicion}`;
+      }).join('');
+      return `<div style="padding:10px 16px 0;"><strong style="font-size:12.5px;">Medida ${medida}</strong></div>
+        <table><thead><tr><th>Material</th><th>Cantidad/unidad</th><th></th></tr></thead><tbody>${filaRows}</tbody></table>`;
+    }).join('');
+    if(!bloquesPorMedida) return '';
+    return `<div class="card"><div class="card-title">${tipo==='colchon_resorte'?'Colchón de Resorte':'Colchón Ortopédico'}</div>${bloquesPorMedida}</div>`;
+  }).join('');
+  if(!bloques) bloques = `<div class="card"><div class="empty">Sin fórmula de colchones aún — agrega una abajo.</div></div>`;
+
+  const formHtml = canEdit ? `
+    <div class="card">
+      <div class="card-title">Agregar a la fórmula de colchones</div>
+      <div class="form-grid">
+        <div><label>Tipo de colchón</label><select id="fc-tipo">${tipoColchonOptions}</select></div>
+        <div><label>Medida</label><select id="fc-medida">${medidaOptions}</select></div>
+        <div class="full"><label>Material</label><select id="fc-material">${materialOptions || '<option value="">Agrega materiales primero</option>'}</select></div>
+        <div class="full"><label>Cantidad por unidad de esa medida</label><input id="fc-cantidad" type="number" step="any"></div>
+        <button class="add-btn" id="fc-add">+ Agregar a la fórmula</button>
+      </div>
+    </div>` : '';
+
+  return `${bloques}${formHtml}`;
+}
+
+// ---------- Fórmulas (módulo único: Casata / Parrillas / Colchones) ----------
+function renderFormulas(){
+  const selector = `<div class="card">
+    <div class="card-title">Fórmulas</div>
+    <div class="card-desc">Elige qué fórmula quieres ver o editar.</div>
+    <div style="padding:0 16px 16px;">
+      <select id="formula-seccion" style="width:100%; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);">
+        <option value="casata" ${formulaSeccionActiva==='casata'?'selected':''}>Fórmula de Casata</option>
+        <option value="parrillas" ${formulaSeccionActiva==='parrillas'?'selected':''}>Fórmula de Parrillas (por medida)</option>
+        <option value="colchones" ${formulaSeccionActiva==='colchones'?'selected':''}>Fórmula de Colchones (por medida)</option>
+      </select>
+    </div>
+  </div>`;
+  let contenido = '';
+  if(formulaSeccionActiva==='casata') contenido = renderFormula();
+  else if(formulaSeccionActiva==='parrillas') contenido = renderFormulaParrillas();
+  else contenido = renderFormulaColchones();
+  return selector + contenido;
+}
+
 function renderProduccionParrillas(){
   const canEdit = myRole==='admin' || myRole==='produccion';
   const tallaOptions = TALLAS_PARRILLA.map(t=>`<option value="${t}">${t}</option>`).join('');
@@ -1344,6 +1477,75 @@ function renderProduccionParrillas(){
   </div>
   <div class="card"><div style="padding:14px 16px; font-size:13px; color:var(--ink-soft);">
     Total histórico producido (todas las tallas): <strong style="color:var(--ink);">${fmt(totalUnidadesProducidas)}</strong> unidades
+  </div></div>`;
+}
+
+let editandoProduccionColchonId = null;
+
+// ---------- Producción Ensamblador (Colchones: Resorte / Ortopédico, por medida) ----------
+function renderProduccionEnsamblador(){
+  const canEdit = myRole==='admin' || myRole==='produccion';
+  const medidaOptions = TALLAS_PARRILLA.map(t=>`<option value="${t}">${t}</option>`).join('');
+  const tipoOptions = `<option value="colchon_resorte">Colchón de Resorte</option><option value="colchon_ortopedico">Colchón Ortopédico</option>`;
+
+  let resumen = [];
+  ['colchon_resorte','colchon_ortopedico'].forEach(tipo=>{
+    TALLAS_PARRILLA.forEach(medida=>{
+      const tieneFormula = state.formulaColchones.some(f=>f.tipoColchon===tipo && f.medida===medida);
+      if(!tieneFormula) return;
+      const {unidades, limitante} = produccionColchonPosible(tipo, medida);
+      const stockT = stockColchonesTerminados(tipo, medida);
+      resumen.push(`<div class="balance-card">
+        <div class="label">${tipo==='colchon_resorte'?'Resorte':'Ortopédico'} ${medida} — producibles hoy</div>
+        <div class="val">${unidades===null?'—':fmt(unidades)} un.</div>
+        <div style="font-size:10.5px;color:var(--ink-soft);margin-top:2px;">Limitado por: ${limitante||'—'} · Stock terminado: ${fmt(stockT)} un.</div>
+      </div>`);
+    });
+  });
+  const resumenHtml = resumen.join('');
+
+  let prodRows = state.produccionColchones.slice().sort((a,b)=>b.fecha.localeCompare(a.fecha)).map(p=>{
+    let filaEdicion = '';
+    if(myRole==='admin' && editandoProduccionColchonId===p.id){
+      filaEdicion = `<tr><td colspan="4" style="background:var(--paper);">
+        <div class="form-grid">
+          <div class="full"><label>Unidades</label><input id="edit-pc-unidades" type="number" step="any" value="${p.unidades}"></div>
+          <button class="add-btn" data-guardar-produccion-colchon="${p.id}" style="grid-column:1/-1;">Guardar</button>
+          <button class="export-btn" data-cancelar-produccion-colchon style="grid-column:1/-1;">Cancelar</button>
+        </div>
+      </td></tr>`;
+    }
+    return `<tr>
+      <td>${p.fecha}</td>
+      <td>${p.tipoColchon==='colchon_resorte'?'Resorte':'Ortopédico'} ${p.medida||''}</td>
+      <td class="num">${fmt(p.unidades)} un.</td>
+      <td>${myRole==='admin' ? `<button class="del-btn" data-editar-produccion-colchon="${p.id}" title="Editar">✏️</button><button class="del-btn" data-del-col="produccionColchones" data-id="${p.id}">✕</button>` : ''}</td>
+    </tr>${filaEdicion}`;
+  }).join('');
+  if(!prodRows) prodRows = `<tr><td colspan="4" class="empty">Sin producción de colchones registrada aún</td></tr>`;
+
+  const totalProducidos = state.produccionColchones.reduce((s,p)=>s+Number(p.unidades||0),0);
+
+  const formHtml = canEdit ? `
+    <div class="form-grid">
+      <div><label>Fecha</label><input id="pc-fecha" type="date" value="${todayISO()}"></div>
+      <div><label>Tipo</label><select id="pc-tipo">${tipoOptions}</select></div>
+      <div><label>Medida</label><select id="pc-medida">${medidaOptions}</select></div>
+      <div class="full"><label>Unidades producidas</label><input id="pc-unidades" type="number" step="any"></div>
+      <button class="add-btn" id="pc-add">+ Registrar producción</button>
+    </div>` : '';
+
+  return `<div class="balance-grid">${resumenHtml}</div>
+
+  <div class="card">
+    <div class="card-title">Producción Ensamblador (Colchones)</div>
+    <div class="card-desc">Reporta cuántos colchones ensamblaste, de qué tipo y medida. El consumo de materiales se descuenta solo, del inventario compartido.</div>
+    <table><thead><tr><th>Fecha</th><th>Tipo/Medida</th><th>Unidades</th><th></th></tr></thead>
+    <tbody>${prodRows}</tbody></table>
+    ${formHtml}
+  </div>
+  <div class="card"><div style="padding:14px 16px; font-size:13px; color:var(--ink-soft);">
+    Total histórico producido (todos los tipos): <strong style="color:var(--ink);">${fmt(totalProducidos)}</strong> unidades
   </div></div>`;
 }
 
@@ -1992,6 +2194,91 @@ function renderClientes(){
   </div>`;
 }
 
+// ---------- Contactos (Clientes / Proveedores / Otros unificado) ----------
+function renderContactos(){
+  const canEdit = myRole==='admin' || myRole==='administrativo';
+  const soloAdmin = myRole==='admin';
+
+  // Combina clientes y proveedores en una sola lista por nombre, marcando su(s) tipo(s)
+  const porNombre = {};
+  state.clientes.forEach(c=>{
+    const clave = normalizarNombre(c.nombre);
+    porNombre[clave] = porNombre[clave] || {nombre:c.nombre, tipos:[], clienteId:null, proveedorId:null, telefono:'', documento:'', email:'', direccion:''};
+    porNombre[clave].tipos.push('Cliente');
+    porNombre[clave].clienteId = c.id;
+    porNombre[clave].telefono = c.telefono||porNombre[clave].telefono;
+    porNombre[clave].documento = c.documento||porNombre[clave].documento;
+    porNombre[clave].email = c.email||porNombre[clave].email;
+    porNombre[clave].direccion = c.direccion||porNombre[clave].direccion;
+  });
+  state.proveedoresCatalogo.forEach(p=>{
+    const clave = normalizarNombre(p.nombre);
+    porNombre[clave] = porNombre[clave] || {nombre:p.nombre, tipos:[], clienteId:null, proveedorId:null, telefono:'', documento:'', email:'', direccion:''};
+    porNombre[clave].tipos.push('Proveedor');
+    porNombre[clave].proveedorId = p.id;
+    porNombre[clave].telefono = p.telefono||porNombre[clave].telefono;
+    porNombre[clave].documento = p.documento||porNombre[clave].documento;
+    porNombre[clave].email = p.email||porNombre[clave].email;
+    porNombre[clave].direccion = p.direccion||porNombre[clave].direccion;
+  });
+  const listaContactos = Object.values(porNombre).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+
+  let rows = listaContactos.map(c=>{
+    const idEdicion = c.nombre.replace(/[^a-zA-Z0-9]/g,'');
+    let filaEdicion = '';
+    if(soloAdmin && editandoContactoNombre===c.nombre){
+      filaEdicion = `<tr><td colspan="3" style="background:var(--paper);">
+        <div class="form-grid">
+          <div class="full"><label>Nombre</label><input id="edit-ct-nombre" value="${c.nombre}"></div>
+          <div><label>Teléfono</label><input id="edit-ct-telefono" value="${c.telefono||''}"></div>
+          <div><label>Documento</label><input id="edit-ct-documento" value="${c.documento||''}"></div>
+          <div><label>Correo</label><input id="edit-ct-email" value="${c.email||''}"></div>
+          <div><label>Dirección</label><input id="edit-ct-direccion" value="${c.direccion||''}"></div>
+          <button class="add-btn" data-guardar-contacto="${c.nombre}" style="grid-column:1/-1;">Guardar</button>
+          <button class="export-btn" data-cancelar-contacto style="grid-column:1/-1;">Cancelar</button>
+        </div>
+      </td></tr>`;
+    }
+    const badges = c.tipos.map(t=>`<span style="display:inline-block; font-size:10px; padding:2px 7px; border-radius:10px; background:${t==='Cliente'?'var(--blue)':'var(--red)'}; color:white; margin-right:4px;">${t}</span>`).join('');
+    return `<tr data-search-row="contactos" data-search-text="${c.nombre.toLowerCase()}">
+      <td>
+        <strong>${c.nombre}</strong><br>${badges}<br>
+        <span style="font-size:10.5px;color:var(--ink-soft)">
+          ${c.telefono||''}${c.telefono && c.email ? ' · ' : ''}${c.email||''}<br>
+          ${c.documento ? 'Doc: '+c.documento : ''}${c.documento && c.direccion ? ' · ' : ''}${c.direccion||''}
+        </span>
+      </td>
+      <td>${soloAdmin ? `<button class="del-btn" data-editar-contacto="${c.nombre}" title="Editar">✏️</button><button class="del-btn" data-eliminar-contacto="${c.nombre}" title="Eliminar">✕</button>` : ''}</td>
+    </tr>${filaEdicion}`;
+  }).join('');
+
+  const formHtml = canEdit ? `
+    <div class="form-grid">
+      <div class="full"><label>Nombre</label><input id="ct-nombre" placeholder="Ej: Ferretería El Roble"></div>
+      <div class="full"><label>Es...</label>
+        <select id="ct-tipo">
+          <option value="cliente">Cliente</option>
+          <option value="proveedor">Proveedor</option>
+          <option value="ambos">Ambos (le compro y le vendo)</option>
+        </select>
+      </div>
+      <div><label>Teléfono</label><input id="ct-telefono" placeholder="Ej: 3001234567"></div>
+      <div><label>Documento (NIT/cédula)</label><input id="ct-documento" placeholder="Ej: 900123456-1"></div>
+      <div><label>Correo (opcional)</label><input id="ct-email" placeholder="correo@ejemplo.com"></div>
+      <div><label>Dirección (opcional)</label><input id="ct-direccion" placeholder="Ej: Cra 10 #20-30"></div>
+      <button class="add-btn" id="ct-add">+ Agregar contacto</button>
+    </div>` : '';
+
+  return `<div class="card">
+    <div class="card-title">Clientes / Proveedores / Otros</div>
+    <div class="card-desc">Aquí creas TODOS tus contactos antes de poder venderles o comprarles — así se evitan nombres duplicados o mal escritos. Marca si es cliente, proveedor, o ambos (le compras y le vendes).</div>
+    <div style="padding:0 16px 12px;"><input type="text" placeholder="🔍 Buscar contacto..." data-search-input="contactos" style="width:100%; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);"></div>
+    <table><thead><tr><th>Contacto</th><th></th></tr></thead>
+    <tbody>${rows}<tr data-search-empty="contactos"><td colspan="2" class="empty">Escribe arriba para buscar</td></tr></tbody></table>
+    ${formHtml}
+  </div>`;
+}
+
 // ---------- Reportes ----------
 function filtrarPorFecha(arr, desde, hasta){
   return arr.filter(x=> x.fecha >= desde && x.fecha <= hasta);
@@ -2505,15 +2792,15 @@ function exportHistoricoPDF(nombreContacto, desde, hasta){
   startY = doc.lastAutoTable.finalY + 8;
 
   const body = [];
-  d.ventas.forEach(v=> body.push([v.fecha, 'Venta', v.numeroRemision?'#'+v.numeroRemision:'—', `${nombreProducto(v.producto)}${v.talla?' '+v.talla:''}${v.medida?' '+v.medida:''}`, fmtMoney(v.total), v.formaPago==='credito'?'Crédito':'Efectivo', v.observaciones||'']));
-  d.compras.forEach(e=> body.push([e.fecha, 'Compra', e.numeroRecibido?'#'+e.numeroRecibido:'—', e.material, fmtMoney(costoTotalEntrada(e)), e.formaPago==='credito'?'Fiado':'Efectivo', e.observaciones||'']));
+  d.ventas.forEach(v=> body.push([v.fecha, 'Venta', v.numeroRemision||'—', `${nombreProducto(v.producto)}${v.talla?' '+v.talla:''}${v.medida?' '+v.medida:''}`, fmtMoney(v.total), v.formaPago==='credito'?'Crédito':'Efectivo', v.observaciones||'']));
+  d.compras.forEach(e=> body.push([e.fecha, 'Compra', e.numeroRecibido||'—', e.material, fmtMoney(costoTotalEntrada(e)), e.formaPago==='credito'?'Fiado':'Efectivo', e.observaciones||'']));
   d.abonosRecibidos.forEach(a=>{
     const ventaOrigen = state.ventas.find(v=>v.id===a.ventaId);
-    body.push([a.fecha, 'Abono recibido', ventaOrigen&&ventaOrigen.numeroRemision?'#'+ventaOrigen.numeroRemision:'—', '—', fmtMoney(a.monto), '—', a.observaciones||'']);
+    body.push([a.fecha, 'Abono recibido', ventaOrigen&&ventaOrigen.numeroRemision?ventaOrigen.numeroRemision:'—', '—', fmtMoney(a.monto), '—', a.observaciones||'']);
   });
   d.pagosHechos.forEach(p=>{
     const entradaOrigen = state.entradas.find(e=>e.id===p.entradaId);
-    body.push([p.fecha, 'Pago hecho', entradaOrigen&&entradaOrigen.numeroRecibido?'#'+entradaOrigen.numeroRecibido:'—', '—', fmtMoney(p.monto), '—', p.observaciones||'']);
+    body.push([p.fecha, 'Pago hecho', entradaOrigen&&entradaOrigen.numeroRecibido?entradaOrigen.numeroRecibido:'—', '—', fmtMoney(p.monto), '—', p.observaciones||'']);
   });
   body.sort((a,b)=> a[0].localeCompare(b[0]));
 
@@ -2572,32 +2859,6 @@ function renderHistorico(){
     const meDebeAhora = ventasConSaldoPendiente().filter(v=>normalizarNombre(v.cliente)===clave).reduce((s,v)=>s+saldoPendiente(v),0);
     const leDeboAhora = comprasConSaldoPendiente().filter(e=>normalizarNombre(e.proveedor||'')===clave).reduce((s,e)=>s+saldoPendienteCompra(e),0);
 
-    const filasVentas = ventas.map(v=>`<tr>
-      <td>${v.fecha}</td><td>Venta</td><td>${v.numeroRemision?'#'+v.numeroRemision:'—'}</td><td>${nombreProducto(v.producto)}${v.talla?' '+v.talla:''}${v.medida?' '+v.medida:''}</td>
-      <td class="num">${fmtMoney(v.total)}</td><td>${v.formaPago==='credito'?'Crédito':'Efectivo'}</td>
-      <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${v.observaciones||''}</td></tr>`).join('');
-
-    const filasCompras = compras.map(e=>`<tr>
-      <td>${e.fecha}</td><td>Compra</td><td>${e.numeroRecibido?'#'+e.numeroRecibido:'—'}</td><td>${e.material}</td>
-      <td class="num">${fmtMoney(costoTotalEntrada(e))}</td><td>${e.formaPago==='credito'?'Fiado':'Efectivo'}</td>
-      <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${e.observaciones||''}</td></tr>`).join('');
-
-    const filasAbonos = abonosRecibidos.map(a=>{
-      const ventaOrigen = state.ventas.find(v=>v.id===a.ventaId);
-      return `<tr>
-      <td>${a.fecha}</td><td>Abono recibido</td><td>${ventaOrigen&&ventaOrigen.numeroRemision?'#'+ventaOrigen.numeroRemision:'—'}</td><td>—</td>
-      <td class="num">${fmtMoney(a.monto)}</td><td>—</td>
-      <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${a.observaciones||''}</td></tr>`;
-    }).join('');
-
-    const filasPagos = pagosHechos.map(p=>{
-      const entradaOrigen = state.entradas.find(e=>e.id===p.entradaId);
-      return `<tr>
-      <td>${p.fecha}</td><td>Pago hecho</td><td>${entradaOrigen&&entradaOrigen.numeroRecibido?'#'+entradaOrigen.numeroRecibido:'—'}</td><td>—</td>
-      <td class="num">${fmtMoney(p.monto)}</td><td>—</td>
-      <td style="font-style:italic;color:var(--ink-soft);font-size:11px;">${p.observaciones||''}</td></tr>`;
-    }).join('');
-
     contenido = `
     <div class="hero-card" style="background:${(meDebeAhora-leDeboAhora)>=0?'var(--blue)':'var(--red)'};">
       <div class="label">${historicoContactoSel}</div>
@@ -2622,11 +2883,31 @@ function renderHistorico(){
     </div>
 
     <div class="card">
-      <div class="card-title">Historial completo (más reciente primero)${(historicoDesde||historicoHasta) ? ` — Del ${historicoDesde||'inicio'} al ${historicoHasta||'hoy'}` : ''}</div>
-      <table><thead><tr><th>Fecha</th><th>Tipo</th><th>N°</th><th>Detalle</th><th>Monto</th><th>Forma</th><th>Observación</th></tr></thead>
-      <tbody>${filasVentas}${filasCompras}${filasAbonos}${filasPagos}
-      ${(!ventas.length && !compras.length && !abonosRecibidos.length && !pagosHechos.length) ? '<tr><td colspan="7" class="empty">Sin movimientos con este contacto</td></tr>' : ''}
-      </tbody></table>
+      <div class="card-title">Historial completo${(historicoDesde||historicoHasta) ? ` — Del ${historicoDesde||'inicio'} al ${historicoHasta||'hoy'}` : ''}</div>
+      <div style="display:flex; gap:0; flex-wrap:wrap;">
+        <div style="flex:1; min-width:280px; border-right:1px solid var(--line);">
+          <div style="padding:8px 16px; font-weight:700; font-size:12.5px; background:var(--paper);">🛒 Compras (y pagos hechos)</div>
+          <table><thead><tr><th>Fecha</th><th>N°</th><th>Detalle</th><th>Monto</th><th>Obs.</th></tr></thead>
+          <tbody>${
+            [...compras.map(e=>`<tr><td>${e.fecha}</td><td>${e.numeroRecibido||'—'}</td><td>${e.material} (${e.formaPago==='credito'?'Fiado':'Efectivo'})</td><td class="num">${fmtMoney(costoTotalEntrada(e))}</td><td style="font-size:10.5px;font-style:italic;">${e.observaciones||''}</td></tr>`),
+            ...pagosHechos.map(p=>{
+              const entradaOrigen = state.entradas.find(e=>e.id===p.entradaId);
+              return `<tr style="color:var(--ink-soft);"><td>${p.fecha}</td><td>${entradaOrigen&&entradaOrigen.numeroRecibido?entradaOrigen.numeroRecibido:'—'}</td><td>Pago hecho</td><td class="num">-${fmtMoney(p.monto)}</td><td style="font-size:10.5px;font-style:italic;">${p.observaciones||''}</td></tr>`;
+            })].join('') || '<tr><td colspan="5" class="empty">Sin compras</td></tr>'
+          }</tbody></table>
+        </div>
+        <div style="flex:1; min-width:280px;">
+          <div style="padding:8px 16px; font-weight:700; font-size:12.5px; background:var(--paper);">💰 Ventas (y abonos recibidos)</div>
+          <table><thead><tr><th>Fecha</th><th>N°</th><th>Detalle</th><th>Monto</th><th>Obs.</th></tr></thead>
+          <tbody>${
+            [...ventas.map(v=>`<tr><td>${v.fecha}</td><td>${v.numeroRemision||'—'}</td><td>${nombreProducto(v.producto)}${v.talla?' '+v.talla:''}${v.medida?' '+v.medida:''} (${v.formaPago==='credito'?'Crédito':'Efectivo'})</td><td class="num">${fmtMoney(v.total)}</td><td style="font-size:10.5px;font-style:italic;">${v.observaciones||''}</td></tr>`),
+            ...abonosRecibidos.map(a=>{
+              const ventaOrigen = state.ventas.find(v=>v.id===a.ventaId);
+              return `<tr style="color:var(--ink-soft);"><td>${a.fecha}</td><td>${ventaOrigen&&ventaOrigen.numeroRemision?ventaOrigen.numeroRemision:'—'}</td><td>Abono recibido</td><td class="num">-${fmtMoney(a.monto)}</td><td style="font-size:10.5px;font-style:italic;">${a.observaciones||''}</td></tr>`;
+            })].join('') || '<tr><td colspan="5" class="empty">Sin ventas</td></tr>'
+          }</tbody></table>
+        </div>
+      </div>
     </div>`;
   }
 
@@ -2839,6 +3120,39 @@ async function unificarNombre(variantes, nombreCanonico){
   return cambios;
 }
 
+// ---------- Gastos (independiente de Administrativo) ----------
+function renderGastos(){
+  const canEdit = myRole==='admin' || myRole==='administrativo';
+  let rows = state.gastos.slice().sort((a,b)=> b.fecha.localeCompare(a.fecha)).map(g=>{
+    return `<tr>
+      <td>${g.fecha}<br><span style="font-size:10.5px;color:var(--ink-soft)">${g.categoria}</span></td>
+      <td>${g.descripcion||''}</td>
+      <td class="num">${fmtMoney(g.monto)}</td>
+      <td><button class="del-btn" data-del-col="gastos" data-id="${g.id}">✕</button></td>
+    </tr>`;
+  }).join('');
+  if(!rows) rows = `<tr><td colspan="4" class="empty">Sin gastos registrados aún</td></tr>`;
+  const catOptions = CATEGORIAS_GASTO.map(c=>`<option value="${c}">${c}</option>`).join('');
+  const totalGastosGeneral = state.gastos.reduce((s,g)=>s+Number(g.monto||0),0);
+
+  return `<div class="hero-card" style="background:var(--red);">
+    <div class="label">Total gastos históricos</div>
+    <div class="amount">${fmtMoney(totalGastosGeneral)}</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Registrar Gasto</div>
+    <div class="card-desc">Arriendo, servicios públicos, nómina, transporte y demás costos del negocio. (No pongas aquí compras de materia prima — eso va en "Cargar Inventario").</div>
+    <table><thead><tr><th>Fecha/Categoría</th><th>Descripción</th><th>Monto</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    ${canEdit ? `<div class="form-grid">
+      <div><label>Fecha</label><input id="g-fecha" type="date" value="${todayISO()}"></div>
+      <div><label>Categoría</label><select id="g-categoria">${catOptions}</select></div>
+      <div class="full"><label>Descripción</label><input id="g-descripcion" placeholder="Ej: Arriendo bodega julio"></div>
+      <div class="full"><label>Monto ($)</label><input id="g-monto" type="number" step="any"></div>
+      <button class="add-btn" id="g-add">+ Registrar gasto</button>
+    </div>` : ''}
+  </div>`;
+}
+
 function renderAdministrativo(){
   const canEdit = myRole==='admin' || myRole==='administrativo';
   const soloAdmin = myRole==='admin';
@@ -2857,12 +3171,17 @@ function renderAdministrativo(){
   // --- Proveedores (compras fiadas), agrupado por proveedor (ignorando mayúsculas/espacios) ---
   const comprasPendientes = comprasConSaldoPendiente();
   const porProveedor = agruparPorProveedor(comprasPendientes);
-  const proveedoresList = Object.keys(porProveedor).map(clave=>{
+  let proveedoresList = Object.keys(porProveedor).map(clave=>{
     const nombre = porProveedor[clave].nombre;
     const compras = porProveedor[clave].items.sort((a,b)=>a.fecha.localeCompare(b.fecha)); // más antigua primero
     const saldoTotal = compras.reduce((s,e)=>s+saldoPendienteCompra(e),0);
-    return {nombre, compras, saldoTotal};
-  }).sort((a,b)=> b.saldoTotal - a.saldoTotal);
+    const fechaMasAntigua = compras.length ? compras[0].fecha : '9999-99-99';
+    return {nombre, compras, saldoTotal, fechaMasAntigua};
+  });
+  if(ordenProveedores==='antiguedad') proveedoresList.sort((a,b)=> a.fechaMasAntigua.localeCompare(b.fechaMasAntigua));
+  else if(ordenProveedores==='nombre') proveedoresList.sort((a,b)=> a.nombre.localeCompare(b.nombre));
+  else proveedoresList.sort((a,b)=> b.saldoTotal - a.saldoTotal);
+  const totalDeudaProveedores = proveedoresList.reduce((s,p)=>s+p.saldoTotal,0);
 
   let proveedorRows = proveedoresList.map(p=>{
     return `<tr data-search-row="proveedores" data-search-text="${p.nombre.toLowerCase()}">
@@ -3007,7 +3326,10 @@ function renderAdministrativo(){
     </div>
   </div>` : '';
 
-  return renderAsistente() + duplicadosCard + fusionManualCard + `<div class="card">
+  return `<div class="hero-card" style="background:var(--red);">
+    <div class="label">Total que le debes a proveedores</div>
+    <div class="amount">${fmtMoney(totalDeudaProveedores)}</div>
+  </div>` + renderAsistente() + duplicadosCard + fusionManualCard + `<div class="card">
     <div class="card-title">Cuadre de Caja</div>
     <div class="card-desc">Busca por fecha, tipo o concepto para ver un movimiento.</div>
     <div style="padding:0 16px 12px;"><input type="text" placeholder="🔍 Buscar movimiento..." data-search-input="cuadre" style="width:100%; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);"></div>
@@ -3027,22 +3349,16 @@ function renderAdministrativo(){
   </div>
 
   <div class="card">
-    <div class="card-title">Registrar Gasto</div>
-    <div class="card-desc">Arriendo, servicios públicos, nómina, transporte y demás costos del negocio. (No pongas aquí compras de materia prima — eso va en "Cargar Inventario").</div>
-    <table><thead><tr><th>Fecha/Categoría</th><th>Descripción</th><th>Monto</th><th></th></tr></thead><tbody>${rows}</tbody></table>
-    <div class="form-grid">
-      <div><label>Fecha</label><input id="g-fecha" type="date" value="${todayISO()}"></div>
-      <div><label>Categoría</label><select id="g-categoria">${catOptions}</select></div>
-      <div class="full"><label>Descripción</label><input id="g-descripcion" placeholder="Ej: Arriendo bodega julio"></div>
-      <div class="full"><label>Monto ($)</label><input id="g-monto" type="number" step="any"></div>
-      <button class="add-btn" id="g-add">+ Registrar gasto</button>
-    </div>
-  </div>
-
-  <div class="card">
     <div class="card-title">Debemos a Proveedores (compras fiadas)</div>
-    <div class="card-desc">Un total por proveedor. El pago descuenta primero de la compra más antigua. Toca 📄 para descargar el estado de solo ese proveedor.</div>
-    <div style="padding:0 16px 12px;"><input type="text" placeholder="🔍 Buscar proveedor..." data-search-input="proveedores" style="width:100%; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);"></div>
+    <div class="card-desc">El pago descuenta primero de la compra más antigua. Toca 📄 para descargar el estado de solo ese proveedor.</div>
+    <div style="padding:0 16px 12px; display:flex; gap:8px; flex-wrap:wrap;">
+      <input type="text" placeholder="🔍 Buscar proveedor..." data-search-input="proveedores" style="flex:1; min-width:150px; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);">
+      <select id="orden-proveedores" style="font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);">
+        <option value="monto" ${ordenProveedores==='monto'?'selected':''}>Ordenar: mayor deuda</option>
+        <option value="antiguedad" ${ordenProveedores==='antiguedad'?'selected':''}>Ordenar: más antigua</option>
+        <option value="nombre" ${ordenProveedores==='nombre'?'selected':''}>Ordenar: nombre (A-Z)</option>
+      </select>
+    </div>
     <table><thead><tr><th>Proveedor</th><th>Debemos</th><th>Pagar</th></tr></thead><tbody>${proveedorRows}<tr data-search-empty="proveedores"><td colspan="3" class="empty">Escribe arriba para buscar</td></tr></tbody></table>
   </div>
 
@@ -3053,15 +3369,6 @@ function renderAdministrativo(){
       <button class="export-btn" id="proveedores-excel" style="flex:1; text-align:center;">⬇ TODOS (Excel)</button>
       <button class="export-btn" id="proveedores-pdf" style="flex:1; text-align:center;">⬇ TODOS (PDF)</button>
     </div>
-  </div>
-
-  <div class="card">
-    <div class="card-title">Catálogo de Proveedores</div>
-    <div class="card-desc">Da de alta tus proveedores con sus datos de contacto. Al registrar una compra fiada, escribe el nombre exactamente igual a como quedó aquí para que las deudas se agrupen bien.</div>
-    <div style="padding:0 16px 12px;"><input type="text" placeholder="🔍 Buscar proveedor..." data-search-input="proveedores-catalogo" style="width:100%; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);"></div>
-    <table><thead><tr><th>Proveedor</th><th></th></tr></thead>
-    <tbody>${proveedoresCatalogoRows}<tr data-search-empty="proveedores-catalogo"><td colspan="2" class="empty">Escribe arriba para buscar</td></tr></tbody></table>
-    ${proveedoresCatalogoForm}
   </div>
 
 
@@ -3090,7 +3397,7 @@ function renderAdministrativo(){
 }
 
 // ---------- Punto de Equilibrio ----------
-function renderEquilibrio(){
+function renderEquilibrioContenido(){
   const canEdit = myRole==='admin' || myRole==='administrativo';
   const costosFijos = state.settings.costosFijos || [];
   const totalCostosFijos = costosFijos.reduce((s,c)=>s+Number(c.monto||0),0);
@@ -3278,8 +3585,187 @@ function renderFinanzas(){
     <strong>Nota:</strong> "Ingresos" y "Gastos" son del mes que elegiste. "¿Dónde está tu plata?" y "¿Qué debemos?" son una foto de HOY, porque son saldos que se acumulan con el tiempo. Los aportes de socios NO son deuda (no se devuelven); los préstamos sí.
   </div></div>
 
+  <div class="section-h">Diagnóstico de la Empresa</div>
+  ${renderDiagnosticoFinanciero(pl)}
+
+  <div class="section-h">Punto de Equilibrio</div>
+  ${renderEquilibrioContenido()}
+
   <div class="section-h">Reportes por Rango de Fechas</div>
   ${renderReportesContenido()}`;
+}
+
+function renderDiagnosticoFinanciero(pl){
+  const totalCostosFijos = (state.settings.costosFijos||[]).reduce((s,c)=>s+Number(c.monto||0),0);
+  const costosTotalesMes = pl.costoVentas + pl.totalGastos;
+  let estado, colorEstado, mensaje;
+  if(pl.utilidad > 0){
+    estado = '✅ Estás GANANDO dinero';
+    colorEstado = 'var(--green,#2C8C8C)';
+    mensaje = `Este mes tus ingresos (${fmtMoney(pl.ingresos)}) superan tus costos y gastos (${fmtMoney(costosTotalesMes)}) por ${fmtMoney(pl.utilidad)}.`;
+  } else if(Math.abs(pl.utilidad) < (pl.ingresos*0.03 || 1)){
+    estado = '⚖️ Estás en PUNTO DE EQUILIBRIO';
+    colorEstado = 'var(--blue)';
+    mensaje = `Tus ingresos casi igualan tus costos. Un pequeño aumento en ventas te pondría en ganancia.`;
+  } else {
+    estado = '🔻 Estás PERDIENDO dinero';
+    colorEstado = 'var(--red)';
+    mensaje = `Este mes tus costos y gastos (${fmtMoney(costosTotalesMes)}) superan tus ingresos (${fmtMoney(pl.ingresos)}) por ${fmtMoney(Math.abs(pl.utilidad))}.`;
+  }
+
+  // Detecta posibles causas simples
+  let causas = [];
+  if(pl.ingresos < totalCostosFijos) causas.push('Tus ventas del mes no alcanzan ni para cubrir tus costos fijos (arriendo, nómina, etc.) — estás <strong>vendiendo muy poco</strong> respecto a tu estructura de costos.');
+  if(pl.ingresos>0 && (pl.costoVentas/pl.ingresos) > 0.7) causas.push('El costo de producir lo que vendiste es muy alto frente al precio de venta — revisa tus <strong>precios o el costo de tus materiales</strong>.');
+  if(pl.totalGastos > pl.ingresos*0.3 && pl.ingresos>0) causas.push('Tus gastos operativos (no de producción) son altos frente a tus ventas — revisa si hay <strong>gastos que se puedan reducir</strong>.');
+  if(pl.cmVendido===0) causas.push('No se registraron ventas de casata este mes — revisa si estás <strong>produciendo pero no vendiendo</strong>, o si falta cargar ventas.');
+  if(causas.length===0 && pl.utilidad<=0) causas.push('Los números están ajustados; vale la pena revisar precios, costos y volumen de venta en conjunto.');
+
+  return `<div class="hero-card" style="background:${colorEstado};">
+    <div class="label">${estado}</div>
+    <div class="amount">${fmtMoney(pl.utilidad)}</div>
+    <div style="font-size:12.5px;opacity:.9;">${mensaje}</div>
+  </div>
+  ${causas.length ? `<div class="card"><div class="card-title">¿Qué puede estar fallando?</div>
+    <div style="padding:0 16px 16px;">${causas.map(c=>`<div style="padding:8px 0; border-bottom:1px solid var(--line); font-size:13px;">⚠️ ${c}</div>`).join('')}</div>
+  </div>` : ''}`;
+}
+
+// ---------- Reportes (nuevo módulo: Ventas/Producción por producto, con metas y gráfica del mes) ----------
+let reportesVista = 'ventas'; // 'ventas' | 'produccion'
+let reportesProductoSel = 'general';
+let reportesProductoChartInstance = null;
+
+function productosReporteOpciones(){
+  let opts = [{value:'general', label:'General (todos los productos)'}];
+  opts.push({value:'casata', label:'Casata'});
+  TALLAS_PARRILLA.forEach(t=> opts.push({value:'parrillas|'+t, label:'Parrilla '+t}));
+  Object.keys(PRECIOS_PRODUCTOS.colchon_resorte.opciones).forEach(m=> opts.push({value:'colchon_resorte|'+m, label:'Colchón Resorte '+m}));
+  Object.keys(PRECIOS_PRODUCTOS.colchon_ortopedico.opciones).forEach(m=> opts.push({value:'colchon_ortopedico|'+m, label:'Colchón Ortopédico '+m}));
+  return opts;
+}
+
+function registrosReportes(){
+  const [tipo, sub] = reportesProductoSel.split('|');
+  if(reportesVista==='ventas'){
+    let arr = state.ventas;
+    if(tipo!=='general'){
+      arr = arr.filter(v=>{
+        if(tipo==='casata') return v.producto==='casata';
+        if(tipo==='parrillas') return v.producto==='parrillas' && v.talla===sub;
+        if(tipo==='colchon_resorte') return v.producto==='colchon_resorte' && v.medida===sub;
+        if(tipo==='colchon_ortopedico') return v.producto==='colchon_ortopedico' && v.medida===sub;
+        return false;
+      });
+    }
+    return arr.map(v=>({fecha:v.fecha, valor:Number(v.total||0)}));
+  } else {
+    if(tipo==='casata') return state.produccion.map(p=>({fecha:p.fecha, valor:Number(p.cmTotal||0)}));
+    if(tipo==='parrillas') return state.produccionParrillas.filter(p=>!sub||p.talla===sub).map(p=>({fecha:p.fecha, valor:Number(p.unidades||0)}));
+    if(tipo==='colchon_resorte') return state.produccionColchones.filter(p=>p.tipoColchon==='colchon_resorte' && (!sub||p.medida===sub)).map(p=>({fecha:p.fecha, valor:Number(p.unidades||0)}));
+    if(tipo==='colchon_ortopedico') return state.produccionColchones.filter(p=>p.tipoColchon==='colchon_ortopedico' && (!sub||p.medida===sub)).map(p=>({fecha:p.fecha, valor:Number(p.unidades||0)}));
+    return [
+      ...state.produccion.map(p=>({fecha:p.fecha, valor:Number(p.cmTotal||0)})),
+      ...state.produccionParrillas.map(p=>({fecha:p.fecha, valor:Number(p.unidades||0)})),
+      ...state.produccionColchones.map(p=>({fecha:p.fecha, valor:Number(p.unidades||0)}))
+    ];
+  }
+}
+
+function claveMetaActual(){ return reportesVista + '|' + reportesProductoSel; }
+
+function initReportesProductoChart(){
+  const canvas = document.getElementById('reportesProductoChart');
+  if(!canvas) return;
+  if(reportesProductoChartInstance) reportesProductoChartInstance.destroy();
+  const mesActual = todayISO().slice(0,7);
+  const registros = registrosReportes().filter(r=>r.fecha.startsWith(mesActual));
+  const diasEnMes = new Date(Number(mesActual.slice(0,4)), Number(mesActual.slice(5,7)), 0).getDate();
+  const porDia = Array.from({length:diasEnMes}, (_,i)=>{
+    const diaStr = mesActual + '-' + String(i+1).padStart(2,'0');
+    return registros.filter(r=>r.fecha===diaStr).reduce((s,r)=>s+r.valor,0);
+  });
+  reportesProductoChartInstance = new Chart(canvas, {
+    type:'bar',
+    data:{
+      labels: Array.from({length:diasEnMes},(_,i)=>String(i+1)),
+      datasets:[{label: reportesVista==='ventas' ? 'Ventas ($) por día' : 'Producción por día', data:porDia, backgroundColor:'#1F4E79'}]
+    },
+    options:{ responsive:true, plugins:{legend:{display:false}}, scales:{ y:{beginAtZero:true} } }
+  });
+}
+
+function renderReportes(){
+  const opciones = productosReporteOpciones();
+  const opcionesHtml = opciones.map(o=>`<option value="${o.value}" ${o.value===reportesProductoSel?'selected':''}>${o.label}</option>`).join('');
+
+  const mesActual = todayISO().slice(0,7);
+  const registrosTodos = registrosReportes();
+  const registrosMes = registrosTodos.filter(r=>r.fecha.startsWith(mesActual));
+  const totalMes = registrosMes.reduce((s,r)=>s+r.valor,0);
+  const totalHistorico = registrosTodos.reduce((s,r)=>s+r.valor,0);
+
+  const meta = Number((state.settings.metas||{})[claveMetaActual()] || 0);
+  const pct = meta>0 ? (totalMes/meta*100) : null;
+  const esVentas = reportesVista==='ventas';
+
+  let estadoMeta = '';
+  if(meta>0){
+    const color = pct>=100 ? 'var(--green,#2C8C8C)' : (pct>=70 ? 'var(--blue)' : 'var(--red)');
+    estadoMeta = `<div class="hero-card" style="background:${color};">
+      <div class="label">Meta del mes: ${esVentas?fmtMoney(meta):fmt(meta)+' unidades'}</div>
+      <div class="amount">${pct.toFixed(0)}% cumplido</div>
+      <div style="font-size:12.5px;opacity:.9;">${pct>=100 ? '¡Meta alcanzada! 🎉' : `Vas ${esVentas?fmtMoney(meta-totalMes):fmt(meta-totalMes)+' unidades'} por debajo de la meta`}</div>
+    </div>`;
+  }
+
+  return `<div class="card">
+    <div class="card-title">Reportes</div>
+    <div class="card-desc">Elige si quieres ver Ventas o Producción, y de qué producto — con gráfica del mes actual y comparación contra tu meta mensual.</div>
+    <div class="form-grid" style="padding:0 16px 16px;">
+      <div><label>Ver</label>
+        <select id="reportes-vista">
+          <option value="ventas" ${reportesVista==='ventas'?'selected':''}>Historial de Ventas</option>
+          <option value="produccion" ${reportesVista==='produccion'?'selected':''}>Historial de Producción</option>
+        </select>
+      </div>
+      <div><label>Producto</label><select id="reportes-producto">${opcionesHtml}</select></div>
+    </div>
+  </div>
+
+  ${estadoMeta}
+
+  <div class="balance-grid">
+    <div class="balance-card"><div class="label">Este mes</div><div class="val">${esVentas?fmtMoney(totalMes):fmt(totalMes)+' un.'}</div></div>
+    <div class="balance-card"><div class="label">Histórico total</div><div class="val">${esVentas?fmtMoney(totalHistorico):fmt(totalHistorico)+' un.'}</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Gráfica del mes actual (${mesActual})</div>
+    <div style="padding:12px 16px;"><canvas id="reportesProductoChart" height="220"></canvas></div>
+  </div>
+
+  ${(myRole==='admin') ? `<div class="card">
+    <div class="card-title">Meta mensual para este producto</div>
+    <div class="form-grid">
+      <div class="full"><label>Meta (${esVentas?'$ vendidos':'unidades producidas'})</label><input id="reportes-meta" type="number" step="any" value="${meta||''}"></div>
+      <button class="add-btn" id="reportes-meta-guardar">Guardar meta</button>
+    </div>
+  </div>` : ''}
+
+  <div class="card">
+    <div style="padding:12px 16px;"><button class="export-btn" id="reportes-excel" style="width:100%;">⬇ Descargar este reporte (Excel)</button></div>
+  </div>`;
+}
+
+function exportReportesProductoExcel(){
+  const registros = registrosReportes().sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const wb = XLSX.utils.book_new();
+  const data = registros.map(r=>({Fecha:r.fecha, Valor:r.valor}));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data.length?data:[{Fecha:'Sin datos'}]), 'Reporte');
+  const wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+  const blob = new Blob([wbout], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  downloadOrShareBlob(blob, `nuvora-reporte-${reportesVista}-${todayISO()}.xlsx`, blob.type);
 }
 
 function renderReportesContenido(){
@@ -3546,6 +4032,35 @@ function attachHandlers(){
     catch(e){ alert('No se pudo agregar: ' + e.message); }
   };
 
+  const formulaSeccionSel = document.getElementById('formula-seccion');
+  if(formulaSeccionSel) formulaSeccionSel.onchange = ()=>{ formulaSeccionActiva = formulaSeccionSel.value; render(); };
+
+  const fcAdd = document.getElementById('fc-add');
+  if(fcAdd) fcAdd.onclick = async ()=>{
+    const tipoColchon = document.getElementById('fc-tipo').value;
+    const medida = document.getElementById('fc-medida').value;
+    const material = document.getElementById('fc-material').value;
+    const cantidad = document.getElementById('fc-cantidad').value;
+    if(!tipoColchon || !medida || !material || !cantidad) return;
+    try{ await db.collection('formulaColchones').add({tipoColchon, medida, material, cantidadPorUnidad:Number(cantidad)}); }
+    catch(e){ alert('No se pudo agregar: ' + e.message); }
+  };
+  document.querySelectorAll('[data-editar-formula-colchon]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoFormulaColchonId = btn.getAttribute('data-editar-formula-colchon'); render(); };
+  });
+  document.querySelectorAll('[data-cancelar-formula-colchon]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoFormulaColchonId = null; render(); };
+  });
+  document.querySelectorAll('[data-guardar-formula-colchon]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const id = btn.getAttribute('data-guardar-formula-colchon');
+      const cantidad = Number(document.getElementById('edit-fc-cant').value);
+      if(!cantidad) return;
+      try{ await db.collection('formulaColchones').doc(id).update({cantidadPorUnidad:cantidad}); editandoFormulaColchonId=null; render(); }
+      catch(e){ alert('No se pudo guardar: ' + e.message); }
+    };
+  });
+
   document.querySelectorAll('[data-editar-formula-parrilla]').forEach(btn=>{
     btn.onclick = ()=>{
       editandoFormulaParrillaId = btn.getAttribute('data-editar-formula-parrilla');
@@ -3577,6 +4092,32 @@ function attachHandlers(){
     try{ await db.collection('produccionParrillas').add({fecha, talla, unidades:Number(unidades)}); }
     catch(e){ alert('No se pudo registrar: ' + e.message); }
   };
+
+  const pcAdd = document.getElementById('pc-add');
+  if(pcAdd) pcAdd.onclick = async ()=>{
+    const fecha = document.getElementById('pc-fecha').value || todayISO();
+    const tipoColchon = document.getElementById('pc-tipo').value;
+    const medida = document.getElementById('pc-medida').value;
+    const unidades = document.getElementById('pc-unidades').value;
+    if(!tipoColchon || !medida || !unidades) return;
+    try{ await db.collection('produccionColchones').add({fecha, tipoColchon, medida, unidades:Number(unidades)}); }
+    catch(e){ alert('No se pudo registrar: ' + e.message); }
+  };
+  document.querySelectorAll('[data-editar-produccion-colchon]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoProduccionColchonId = btn.getAttribute('data-editar-produccion-colchon'); render(); };
+  });
+  document.querySelectorAll('[data-cancelar-produccion-colchon]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoProduccionColchonId = null; render(); };
+  });
+  document.querySelectorAll('[data-guardar-produccion-colchon]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const id = btn.getAttribute('data-guardar-produccion-colchon');
+      const unidades = Number(document.getElementById('edit-pc-unidades').value);
+      if(!unidades) return;
+      try{ await db.collection('produccionColchones').doc(id).update({unidades}); editandoProduccionColchonId=null; render(); }
+      catch(e){ alert('No se pudo guardar: ' + e.message); }
+    };
+  });
 
   document.querySelectorAll('[data-editar-produccion-parrilla]').forEach(btn=>{
     btn.onclick = ()=>{ editandoProduccionParrillaId = btn.getAttribute('data-editar-produccion-parrilla'); render(); };
@@ -3754,6 +4295,66 @@ function attachHandlers(){
         editandoClienteId = null;
         render();
       }catch(e){ alert('No se pudo guardar: ' + e.message); }
+    };
+  });
+
+  const ctAdd = document.getElementById('ct-add');
+  if(ctAdd) ctAdd.onclick = async ()=>{
+    const nombre = document.getElementById('ct-nombre').value.trim();
+    const tipo = document.getElementById('ct-tipo').value; // cliente | proveedor | ambos
+    const telefono = document.getElementById('ct-telefono').value.trim();
+    const documento = document.getElementById('ct-documento').value.trim();
+    const email = document.getElementById('ct-email').value.trim();
+    const direccion = document.getElementById('ct-direccion').value.trim();
+    if(!nombre){ alert('Escribe un nombre.'); return; }
+    const yaCliente = state.clientes.some(c=>normalizarNombre(c.nombre)===normalizarNombre(nombre));
+    const yaProveedor = state.proveedoresCatalogo.some(p=>normalizarNombre(p.nombre)===normalizarNombre(nombre));
+    if((tipo==='cliente'||tipo==='ambos') && yaCliente){ alert(`Ya existe un cliente con ese nombre: "${nombre}".`); return; }
+    if((tipo==='proveedor'||tipo==='ambos') && yaProveedor){ alert(`Ya existe un proveedor con ese nombre: "${nombre}".`); return; }
+    try{
+      const datos = {nombre, telefono, documento, email, direccion};
+      if(tipo==='cliente' || tipo==='ambos') await db.collection('clientes').add(datos);
+      if(tipo==='proveedor' || tipo==='ambos') await db.collection('proveedores').add(datos);
+    }catch(e){ alert('No se pudo agregar el contacto: ' + e.message); }
+  };
+
+  document.querySelectorAll('[data-editar-contacto]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoContactoNombre = btn.getAttribute('data-editar-contacto'); render(); };
+  });
+  document.querySelectorAll('[data-cancelar-contacto]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoContactoNombre = null; render(); };
+  });
+  document.querySelectorAll('[data-guardar-contacto]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const nombreOriginal = btn.getAttribute('data-guardar-contacto');
+      const nombre = document.getElementById('edit-ct-nombre').value.trim();
+      const telefono = document.getElementById('edit-ct-telefono').value.trim();
+      const documento = document.getElementById('edit-ct-documento').value.trim();
+      const email = document.getElementById('edit-ct-email').value.trim();
+      const direccion = document.getElementById('edit-ct-direccion').value.trim();
+      if(!nombre) return;
+      try{
+        const datos = {nombre, telefono, documento, email, direccion};
+        const clienteMatch = state.clientes.find(c=>c.nombre===nombreOriginal);
+        const proveedorMatch = state.proveedoresCatalogo.find(p=>p.nombre===nombreOriginal);
+        if(clienteMatch) await db.collection('clientes').doc(clienteMatch.id).update(datos);
+        if(proveedorMatch) await db.collection('proveedores').doc(proveedorMatch.id).update(datos);
+        if(nombre !== nombreOriginal){ await unificarNombre([nombreOriginal], nombre); }
+        editandoContactoNombre = null;
+        render();
+      }catch(e){ alert('No se pudo guardar: ' + e.message); }
+    };
+  });
+  document.querySelectorAll('[data-eliminar-contacto]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const nombre = btn.getAttribute('data-eliminar-contacto');
+      if(!confirm(`¿Eliminar el contacto "${nombre}" del catálogo? (Sus movimientos históricos no se borran, solo la ficha)`)) return;
+      try{
+        const clienteMatch = state.clientes.find(c=>c.nombre===nombre);
+        const proveedorMatch = state.proveedoresCatalogo.find(p=>p.nombre===nombre);
+        if(clienteMatch) await db.collection('clientes').doc(clienteMatch.id).delete();
+        if(proveedorMatch) await db.collection('proveedores').doc(proveedorMatch.id).delete();
+      }catch(e){ alert('No se pudo eliminar: ' + e.message); }
     };
   });
 
@@ -3975,6 +4576,24 @@ function attachHandlers(){
   if(expBalance) expBalance.onclick = ()=> exportToExcel('nuvora-finanzas', 'Ventas por Cliente', dataBalance());
   const expBalancePdf = document.getElementById('export-balance-pdf');
   if(expBalancePdf) expBalancePdf.onclick = ()=> exportToPDF('nuvora-finanzas', 'Ventas por Cliente', dataBalance());
+
+  const ordenProveedoresSel = document.getElementById('orden-proveedores');
+  if(ordenProveedoresSel) ordenProveedoresSel.onchange = ()=>{ ordenProveedores = ordenProveedoresSel.value; render(); };
+
+  const reportesVistaSel = document.getElementById('reportes-vista');
+  if(reportesVistaSel) reportesVistaSel.onchange = ()=>{ reportesVista = reportesVistaSel.value; render(); };
+  const reportesProductoSelEl = document.getElementById('reportes-producto');
+  if(reportesProductoSelEl) reportesProductoSelEl.onchange = ()=>{ reportesProductoSel = reportesProductoSelEl.value; render(); };
+  const reportesMetaGuardar = document.getElementById('reportes-meta-guardar');
+  if(reportesMetaGuardar) reportesMetaGuardar.onclick = async ()=>{
+    const valor = Number(document.getElementById('reportes-meta').value) || 0;
+    const metasActuales = Object.assign({}, state.settings.metas||{});
+    metasActuales[claveMetaActual()] = valor;
+    try{ await db.collection('settings').doc('config').set({metas: metasActuales}, {merge:true}); }
+    catch(e){ alert('No se pudo guardar la meta: ' + e.message); }
+  };
+  const reportesExcelBtn = document.getElementById('reportes-excel');
+  if(reportesExcelBtn) reportesExcelBtn.onclick = ()=>{ try{ exportReportesProductoExcel(); }catch(e){ alert('No se pudo exportar: ' + e.message); } };
 
   const gAdd = document.getElementById('g-add');
   if(gAdd) gAdd.onclick = async ()=>{
