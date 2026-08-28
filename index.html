@@ -432,7 +432,8 @@ const ALL_TABS = [
   {id:'produccionParrillas', label:'Producción Parrillas'},
   {id:'produccionEnsamblador', label:'Producción Ensamblador'},
   {id:'ventas', label:'Ventas'},
-  {id:'contactos', label:'Clientes / Proveedores / Otros'},
+  {id:'clientes', label:'Clientes'},
+  {id:'proveedores', label:'Proveedores'},
   {id:'cartera', label:'Cartera'},
   {id:'consolidacion', label:'Consolidación de Cartera'},
   {id:'historico', label:'Histórico'},
@@ -1002,7 +1003,8 @@ function renderPanels(){
   if(activeTab==='produccionParrillas') div.innerHTML = renderProduccionParrillas();
   if(activeTab==='produccionEnsamblador') div.innerHTML = renderProduccionEnsamblador();
   if(activeTab==='ventas') div.innerHTML = renderVentas();
-  if(activeTab==='contactos') div.innerHTML = renderContactos();
+  if(activeTab==='clientes') div.innerHTML = renderClientes();
+  if(activeTab==='proveedores') div.innerHTML = renderProveedoresCatalogo();
   if(activeTab==='cartera') div.innerHTML = renderCartera();
   if(activeTab==='consolidacion') div.innerHTML = renderConsolidacionCartera();
   if(activeTab==='historico') div.innerHTML = renderHistorico();
@@ -2226,6 +2228,59 @@ function renderClientes(){
 }
 
 // ---------- Contactos (Clientes / Proveedores / Otros unificado) ----------
+// ---------- Proveedores (catálogo, separado de Clientes) ----------
+function renderProveedoresCatalogo(){
+  const canEdit = myRole==='admin' || myRole==='administrativo';
+  const soloAdmin = myRole==='admin';
+
+  let rows = state.proveedoresCatalogo.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>{
+    let filaEdicion = '';
+    if(soloAdmin && editandoProveedorId===p.id){
+      filaEdicion = `<tr><td colspan="2" style="background:var(--paper);">
+        <div class="form-grid">
+          <div class="full"><label>Nombre</label><input id="edit-pr-nombre" value="${p.nombre}"></div>
+          <div><label>Teléfono</label><input id="edit-pr-telefono" value="${p.telefono||''}"></div>
+          <div><label>Documento</label><input id="edit-pr-documento" value="${p.documento||''}"></div>
+          <div><label>Correo</label><input id="edit-pr-email" value="${p.email||''}"></div>
+          <div><label>Dirección</label><input id="edit-pr-direccion" value="${p.direccion||''}"></div>
+          <button class="add-btn" data-guardar-proveedor="${p.id}" style="grid-column:1/-1;">Guardar</button>
+          <button class="export-btn" data-cancelar-proveedor style="grid-column:1/-1;">Cancelar</button>
+        </div>
+      </td></tr>`;
+    }
+    return `<tr data-search-row="proveedores-catalogo" data-search-text="${p.nombre.toLowerCase()}">
+      <td>
+        <strong>${p.nombre}</strong><br>
+        <span style="font-size:10.5px;color:var(--ink-soft)">
+          ${p.telefono||''}${p.telefono && p.email ? ' · ' : ''}${p.email||''}<br>
+          ${p.documento ? 'Doc: '+p.documento : ''}${p.documento && p.direccion ? ' · ' : ''}${p.direccion||''}
+        </span>
+      </td>
+      <td>${soloAdmin ? `<button class="del-btn" data-editar-proveedor="${p.id}" title="Editar">✏️</button><button class="del-btn" data-del-col="proveedores" data-id="${p.id}">✕</button>` : ''}</td>
+    </tr>${filaEdicion}`;
+  }).join('');
+  if(!rows) rows = '';
+
+  const formHtml = canEdit ? `
+    <div class="form-grid">
+      <div class="full"><label>Nombre</label><input id="pr-nombre" placeholder="Ej: Distribuidora ABC"></div>
+      <div><label>Teléfono</label><input id="pr-telefono" placeholder="Ej: 3001234567"></div>
+      <div><label>Documento (NIT)</label><input id="pr-documento" placeholder="Ej: 900123456-1"></div>
+      <div><label>Correo (opcional)</label><input id="pr-email" placeholder="correo@ejemplo.com"></div>
+      <div><label>Dirección (opcional)</label><input id="pr-direccion" placeholder="Ej: Cra 10 #20-30"></div>
+      <button class="add-btn" id="pr-add">+ Agregar proveedor</button>
+    </div>` : '';
+
+  return `<div class="card">
+    <div class="card-title">Proveedores</div>
+    <div class="card-desc">Da de alta tus proveedores con sus datos de contacto. Créalos aquí primero antes de registrar una compra fiada.</div>
+    <div style="padding:0 16px 12px;"><input type="text" placeholder="🔍 Buscar proveedor..." data-search-input="proveedores-catalogo" style="width:100%; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);"></div>
+    <table><thead><tr><th>Proveedor</th><th></th></tr></thead>
+    <tbody>${rows}<tr data-search-empty="proveedores-catalogo"><td colspan="2" class="empty">Escribe arriba para buscar</td></tr></tbody></table>
+    ${formHtml}
+  </div>`;
+}
+
 function renderContactos(){
   const canEdit = myRole==='admin' || myRole==='administrativo';
   const soloAdmin = myRole==='admin';
