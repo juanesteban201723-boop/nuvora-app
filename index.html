@@ -312,13 +312,15 @@ function uid(){ return Math.random().toString(36).slice(2,9); }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 function fmt(n){ if(n===null||n===undefined||isNaN(n)) return '—'; return Number(n).toLocaleString('es-CO', {maximumFractionDigits:2}); }
 function fmtMoney(n){ if(n===null||n===undefined||isNaN(n)) return '—'; return '$' + Math.round(n).toLocaleString('es-CO'); }
-function nombreProducto(producto){
+function nombreProducto(producto, materialVenta){
   if(producto==='parrillas') return 'Parrillas Resortadas';
   if(producto==='colchon_nuvora') return 'Colchón Nuvora';
   if(producto==='colchon_resorte') return 'Colchón de Resorte';
   if(producto==='colchon_ortopedico') return 'Colchón Ortopédico';
   if(producto==='marcos') return 'Marco';
   if(producto==='resorte_bonell') return 'Resorte Bonell';
+  if(producto==='material_suelto') return materialVenta ? `Material: ${materialVenta}` : 'Material suelto';
+  if(TIPOS_COLCHON.includes(producto)) return NOMBRES_TIPOS_COLCHON[producto];
   return 'Casata';
 }
 function esProductoUnidades(producto){ return producto!=='casata'; }
@@ -411,6 +413,15 @@ const PRECIOS_PRODUCTOS = {
 };
 // Mapa talla (formato "1.40") -> medida de parrilla (formato "140x190") para reusar PRECIOS_PRODUCTOS.parrilla_*
 const TALLA_A_MEDIDA_PARRILLA = { '1.00':'100x190', '1.40':'140x190', '1.60':'160x190', '2.00':'200x200' };
+const TIPOS_COLCHON = ['colchon_resorte_satin','colchon_resorte_yacar','colchon_ortopedico_satin','colchon_ortopedico_yacar','colchon_pilotos_yacar','colchon_comprimidos'];
+const NOMBRES_TIPOS_COLCHON = {
+  colchon_resorte_satin: 'Resorte - Satín',
+  colchon_resorte_yacar: 'Resorte - Yacar',
+  colchon_ortopedico_satin: 'Ortopédico - Satín',
+  colchon_ortopedico_yacar: 'Ortopédico - Yacar',
+  colchon_pilotos_yacar: 'Pilotos - Yacar',
+  colchon_comprimidos: 'Comprimidos'
+};
 
 const ALL_TABS = [
   {id:'dashboard', label:'Dashboard'},
@@ -654,8 +665,9 @@ function stockMaterial(nombre){
   const entradasTotal = state.entradas.filter(e=>e.material===nombre).reduce((s,e)=>s+Number(e.cantidad),0);
   const f = state.formula.find(f=>f.material===nombre);
   const totalCm = state.produccion.reduce((s,p)=>s+Number(p.cmTotal||0),0);
-  const consumo = f ? (Number(f.kgPor100cm)||0) * (totalCm/100) : 0;
-  return inicial + entradasTotal - consumo;
+  const consumoCasata = f ? (Number(f.kgPor100cm)||0) * (totalCm/100) : 0;
+  const ventasSueltas = state.ventas.filter(v=>v.producto==='material_suelto' && v.material===nombre).reduce((s,v)=>s+Number(v.cmVendidos||0),0);
+  return inicial + entradasTotal - consumoCasata - ventasSueltas;
 }
 
 function produccionCasata(){
@@ -1073,7 +1085,7 @@ function renderDashboard(){
   }
 
   const colchonesConFormula = [];
-  ['colchon_resorte','colchon_ortopedico'].forEach(tipo=>{
+  TIPOS_COLCHON.forEach(tipo=>{
     TALLAS_PARRILLA.forEach(medida=>{
       if(state.formulaColchones.some(f=>f.tipoColchon===tipo && f.medida===medida)) colchonesConFormula.push({tipo, medida});
     });
@@ -1082,7 +1094,7 @@ function renderDashboard(){
     html += `<div class="section-h">Colchones — producibles hoy</div>
     <div class="balance-grid">${colchonesConFormula.map(({tipo,medida})=>{
       const {unidades, limitante} = produccionColchonPosible(tipo, medida);
-      return `<div class="balance-card"><div class="label">${tipo==='colchon_resorte'?'Resorte':'Ortopédico'} ${medida}</div><div class="val">${unidades===null?'—':fmt(unidades)} un.</div>
+      return `<div class="balance-card"><div class="label">${NOMBRES_TIPOS_COLCHON[tipo]} ${medida}</div><div class="val">${unidades===null?'—':fmt(unidades)} un.</div>
         <div style="font-size:10.5px;color:var(--ink-soft);margin-top:2px;">Limitado por: ${limitante||'—'}</div></div>`;
     }).join('')}</div>`;
   }
@@ -1182,14 +1194,21 @@ function renderMateriales(){
     (<strong>${fmtMoney(costoProd/100)}</strong> por cm)
   </div></div>` : '';
 
+  const tiposExistentes = [...new Set(['Retal','Químico', ...state.materiales.map(m=>m.tipo).filter(Boolean)])];
+  const unidadesExistentes = [...new Set(['kg','ml', ...state.materiales.map(m=>m.unidad).filter(Boolean)])];
+  const tipoOptionsHtml = tiposExistentes.map(t=>`<option value="${t}">${t}</option>`).join('') + `<option value="__otro__">+ Otro (escribir nuevo)</option>`;
+  const unidadOptionsHtml = unidadesExistentes.map(u=>`<option value="${u}">${u}</option>`).join('') + `<option value="__otro__">+ Otra (escribir nueva)</option>`;
+
   const formHtml = canEdit ? `
     <div class="form-grid cols3">
       <div class="full"><label>Nombre del material</label><input id="m-nombre" placeholder="Ej: Estaño"></div>
       <div><label>Tipo</label>
-        <select id="m-tipo"><option value="Retal">Retal de espuma</option><option value="Químico">Químico</option></select>
+        <select id="m-tipo">${tipoOptionsHtml}</select>
+        <input id="m-tipo-otro" placeholder="Escribe el nuevo tipo" style="display:none; margin-top:6px;">
       </div>
       <div><label>Unidad</label>
-        <select id="m-unidad"><option value="kg">Kilos (kg)</option><option value="ml">Mililitros (ml)</option></select>
+        <select id="m-unidad">${unidadOptionsHtml}</select>
+        <input id="m-unidad-otro" placeholder="Escribe la nueva unidad" style="display:none; margin-top:6px;">
       </div>
       <div><label>Stock inicial</label><input id="m-stock" type="number" step="any"></div>
       <div><label>Stock mínimo</label><input id="m-min" type="number" step="any"></div>
@@ -1348,10 +1367,11 @@ function renderFormulaParrillas(){
 function renderFormulaColchones(){
   const canEdit = myRole==='admin';
   const medidaOptions = TALLAS_PARRILLA.map(t=>`<option value="${t}">${t}</option>`).join('');
-  const tipoColchonOptions = `<option value="colchon_resorte">Colchón de Resorte</option><option value="colchon_ortopedico">Colchón Ortopédico</option>`;
+  const tipoColchonOptions = TIPOS_COLCHON.map(t=>`<option value="${t}">${NOMBRES_TIPOS_COLCHON[t]}</option>`).join('');
   const materialOptions = state.materiales.map(m=>`<option value="${m.nombre}">${m.nombre} (${m.unidad||'kg'})</option>`).join('');
 
-  let bloques = ['colchon_resorte','colchon_ortopedico'].map(tipo=>{
+  let bloques = TIPOS_COLCHON.map(tipo=>{
+    const tiene140 = state.formulaColchones.some(f=>f.tipoColchon===tipo && f.medida==='1.40');
     const bloquesPorMedida = TALLAS_PARRILLA.map(medida=>{
       const filas = state.formulaColchones.filter(f=>f.tipoColchon===tipo && f.medida===medida);
       if(filas.length===0) return '';
@@ -1378,13 +1398,17 @@ function renderFormulaColchones(){
         <table><thead><tr><th>Material</th><th>Cantidad/unidad</th><th></th></tr></thead><tbody>${filaRows}</tbody></table>`;
     }).join('');
     if(!bloquesPorMedida) return '';
-    return `<div class="card"><div class="card-title">${tipo==='colchon_resorte'?'Colchón de Resorte':'Colchón Ortopédico'}</div>${bloquesPorMedida}</div>`;
+    return `<div class="card"><div class="card-title">${NOMBRES_TIPOS_COLCHON[tipo]}</div>
+      ${bloquesPorMedida}
+      ${(canEdit && tiene140) ? `<div style="padding:0 16px 16px;"><button class="export-btn" data-generar-otras-medidas="${tipo}" style="width:100%;">⚙️ Generar automáticamente 1.00, 1.60 y 2.00 (proporcional a la de 1.40)</button></div>` : ''}
+    </div>`;
   }).join('');
-  if(!bloques) bloques = `<div class="card"><div class="empty">Sin fórmula de colchones aún — agrega una abajo.</div></div>`;
+  if(!bloques) bloques = `<div class="card"><div class="empty">Sin fórmula de colchones aún — agrega una abajo, empezando por la medida 1.40 (así puedes generar el resto automático).</div></div>`;
 
   const formHtml = canEdit ? `
     <div class="card">
       <div class="card-title">Agregar a la fórmula de colchones</div>
+      <div class="card-desc">Tip: carga primero la fórmula completa de la medida 1.40 — luego puedes generar 1.00, 1.60 y 2.00 automáticamente con un clic (proporcional).</div>
       <div class="form-grid">
         <div><label>Tipo de colchón</label><select id="fc-tipo">${tipoColchonOptions}</select></div>
         <div><label>Medida</label><select id="fc-medida">${medidaOptions}</select></div>
@@ -1486,17 +1510,17 @@ let editandoProduccionColchonId = null;
 function renderProduccionEnsamblador(){
   const canEdit = myRole==='admin' || myRole==='produccion';
   const medidaOptions = TALLAS_PARRILLA.map(t=>`<option value="${t}">${t}</option>`).join('');
-  const tipoOptions = `<option value="colchon_resorte">Colchón de Resorte</option><option value="colchon_ortopedico">Colchón Ortopédico</option>`;
+  const tipoOptions = TIPOS_COLCHON.map(t=>`<option value="${t}">${NOMBRES_TIPOS_COLCHON[t]}</option>`).join('');
 
   let resumen = [];
-  ['colchon_resorte','colchon_ortopedico'].forEach(tipo=>{
+  TIPOS_COLCHON.forEach(tipo=>{
     TALLAS_PARRILLA.forEach(medida=>{
       const tieneFormula = state.formulaColchones.some(f=>f.tipoColchon===tipo && f.medida===medida);
       if(!tieneFormula) return;
       const {unidades, limitante} = produccionColchonPosible(tipo, medida);
       const stockT = stockColchonesTerminados(tipo, medida);
       resumen.push(`<div class="balance-card">
-        <div class="label">${tipo==='colchon_resorte'?'Resorte':'Ortopédico'} ${medida} — producibles hoy</div>
+        <div class="label">${NOMBRES_TIPOS_COLCHON[tipo]} ${medida} — producibles hoy</div>
         <div class="val">${unidades===null?'—':fmt(unidades)} un.</div>
         <div style="font-size:10.5px;color:var(--ink-soft);margin-top:2px;">Limitado por: ${limitante||'—'} · Stock terminado: ${fmt(stockT)} un.</div>
       </div>`);
@@ -1517,7 +1541,7 @@ function renderProduccionEnsamblador(){
     }
     return `<tr>
       <td>${p.fecha}</td>
-      <td>${p.tipoColchon==='colchon_resorte'?'Resorte':'Ortopédico'} ${p.medida||''}</td>
+      <td>${NOMBRES_TIPOS_COLCHON[p.tipoColchon]||p.tipoColchon} ${p.medida||''}</td>
       <td class="num">${fmt(p.unidades)} un.</td>
       <td>${myRole==='admin' ? `<button class="del-btn" data-editar-produccion-colchon="${p.id}" title="Editar">✏️</button><button class="del-btn" data-del-col="produccionColchones" data-id="${p.id}">✕</button>` : ''}</td>
     </tr>${filaEdicion}`;
@@ -1996,6 +2020,7 @@ let ventaProducto = 'casata';
 let ventaTalla = TALLAS_PARRILLA[0];
 let ventaTipoParrilla = 'estandar';
 let ventaMedida = null;
+let ventaMaterialSel = null;
 
 function renderVentas(){
   const canEdit = myRole==='admin' || myRole==='administrativo';
@@ -2067,6 +2092,8 @@ function renderVentas(){
   const medidaOpcionesActual = esMedidaForm ? PRECIOS_PRODUCTOS[ventaProducto].opciones : null;
   const medidaOptionsVenta = medidaOpcionesActual ? Object.keys(medidaOpcionesActual).map(med=>`<option value="${med}" ${med===ventaMedida?'selected':''}>${med}</option>`).join('') : '';
   const esBonellForm = ventaProducto==='resorte_bonell';
+  const esMaterialForm = ventaProducto==='material_suelto';
+  const materialOptionsVenta = state.materiales.map(m=>`<option value="${m.nombre}" data-unidad="${m.unidad||'kg'}" ${m.nombre===ventaMaterialSel?'selected':''}>${m.nombre} (${m.unidad||'kg'}) — stock: ${fmt(stockMaterial(m.nombre))}</option>`).join('');
 
   // Precio automático según el producto/talla/medida/tipo elegido (el vendedor aún puede sobreescribirlo)
   let precioAuto = '';
@@ -2078,6 +2105,8 @@ function renderVentas(){
     precioAuto = (ventaMedida && medidaOpcionesActual[ventaMedida]) ? medidaOpcionesActual[ventaMedida] : '';
   } else if(esBonellForm){
     precioAuto = PRECIOS_PRODUCTOS.resorte_bonell.precioUnico;
+  } else if(esMaterialForm){
+    precioAuto = ventaMaterialSel ? Math.round(costoPromedio(ventaMaterialSel) * 1.3) : ''; // sugerido: costo + 30%, editable
   } else if(ventaProducto==='casata'){
     precioAuto = state.settings.precioCm || '';
   }
@@ -2095,6 +2124,7 @@ function renderVentas(){
           <option value="colchon_ortopedico" ${ventaProducto==='colchon_ortopedico'?'selected':''}>Colchón Ortopédico</option>
           <option value="marcos" ${ventaProducto==='marcos'?'selected':''}>Marco</option>
           <option value="resorte_bonell" ${esBonellForm?'selected':''}>Resorte Bonell (unidad)</option>
+          <option value="material_suelto" ${esMaterialForm?'selected':''}>Material suelto (retal, químicos, etc.)</option>
         </select>
       </div>
       ${esParrillaForm ? `
@@ -2106,12 +2136,13 @@ function renderVentas(){
       </div>
       <div><label>Talla</label><select id="v-talla">${tallaOptionsVenta}</select></div>` : ''}
       ${esMedidaForm ? `<div class="full"><label>Medida</label><select id="v-medida">${medidaOptionsVenta}</select></div>` : ''}
+      ${esMaterialForm ? `<div class="full"><label>Material</label><select id="v-material">${materialOptionsVenta || '<option value="">No hay materiales cargados</option>'}</select></div>` : ''}
       <div class="full"><label>Cliente</label>
         <select id="v-cliente">${clienteOptions || '<option value="">Agrega un cliente primero</option>'}</select>
       </div>
       <div><label>Fecha</label><input id="v-fecha" type="date" value="${todayISO()}"></div>
-      <div><label>${esUnidadesForm?'Unidades vendidas':'Cm vendidos'}</label><input id="v-cm" type="number" step="any"></div>
-      <div><label>${esUnidadesForm?'Precio por unidad ($)':'Precio por cm ($)'}</label><input id="v-precio" type="number" step="any" value="${precioAuto}"></div>
+      <div><label>${esMaterialForm ? `Cantidad vendida (${ventaMaterialSel ? (state.materiales.find(m=>m.nombre===ventaMaterialSel)||{}).unidad||'kg' : 'kg/ml'})` : (esUnidadesForm?'Unidades vendidas':'Cm vendidos')}</label><input id="v-cm" type="number" step="any"></div>
+      <div><label>${esMaterialForm ? 'Precio por unidad ($)' : (esUnidadesForm?'Precio por unidad ($)':'Precio por cm ($)')}</label><input id="v-precio" type="number" step="any" value="${precioAuto}"></div>
       <div>
         <label>Forma de pago</label>
         <select id="v-forma">
@@ -2230,6 +2261,12 @@ function renderContactos(){
       filaEdicion = `<tr><td colspan="3" style="background:var(--paper);">
         <div class="form-grid">
           <div class="full"><label>Nombre</label><input id="edit-ct-nombre" value="${c.nombre}"></div>
+          <div class="full"><label>Es...</label>
+            <div style="display:flex; gap:16px; padding:8px 0;">
+              <label style="display:flex; align-items:center; gap:6px; font-size:13px;"><input type="checkbox" id="edit-ct-es-cliente" ${c.tipos.includes('Cliente')?'checked':''}> Cliente</label>
+              <label style="display:flex; align-items:center; gap:6px; font-size:13px;"><input type="checkbox" id="edit-ct-es-proveedor" ${c.tipos.includes('Proveedor')?'checked':''}> Proveedor</label>
+            </div>
+          </div>
           <div><label>Teléfono</label><input id="edit-ct-telefono" value="${c.telefono||''}"></div>
           <div><label>Documento</label><input id="edit-ct-documento" value="${c.documento||''}"></div>
           <div><label>Correo</label><input id="edit-ct-email" value="${c.email||''}"></div>
@@ -3954,15 +3991,28 @@ function attachHandlers(){
   const repPdf = document.getElementById('rep-pdf');
   if(repPdf) repPdf.onclick = exportReportePDF;
 
+  const mTipoSel = document.getElementById('m-tipo');
+  if(mTipoSel) mTipoSel.onchange = ()=>{
+    const otroInput = document.getElementById('m-tipo-otro');
+    if(otroInput) otroInput.style.display = (mTipoSel.value==='__otro__') ? 'block' : 'none';
+  };
+  const mUnidadSel = document.getElementById('m-unidad');
+  if(mUnidadSel) mUnidadSel.onchange = ()=>{
+    const otroInput = document.getElementById('m-unidad-otro');
+    if(otroInput) otroInput.style.display = (mUnidadSel.value==='__otro__') ? 'block' : 'none';
+  };
+
   const mAdd = document.getElementById('m-add');
   if(mAdd) mAdd.onclick = async ()=>{
     const nombre = document.getElementById('m-nombre').value.trim();
-    const tipo = document.getElementById('m-tipo').value;
-    const unidad = document.getElementById('m-unidad').value;
+    let tipo = document.getElementById('m-tipo').value;
+    if(tipo==='__otro__') tipo = document.getElementById('m-tipo-otro').value.trim();
+    let unidad = document.getElementById('m-unidad').value;
+    if(unidad==='__otro__') unidad = document.getElementById('m-unidad-otro').value.trim();
     const stockInicial = document.getElementById('m-stock').value || 0;
     const stockMinimo = document.getElementById('m-min').value || 0;
     const costoInicial = document.getElementById('m-costo') ? (document.getElementById('m-costo').value || 0) : 0;
-    if(!nombre) return;
+    if(!nombre || !tipo || !unidad) return;
     try{ await db.collection('materiales').add({nombre, tipo, unidad, stockInicial:Number(stockInicial), stockMinimo:Number(stockMinimo), costoInicial:Number(costoInicial)}); }
     catch(e){ alert('No se pudo agregar: ' + e.message); }
   };
@@ -4045,6 +4095,38 @@ function attachHandlers(){
     try{ await db.collection('formulaColchones').add({tipoColchon, medida, material, cantidadPorUnidad:Number(cantidad)}); }
     catch(e){ alert('No se pudo agregar: ' + e.message); }
   };
+
+  document.querySelectorAll('[data-generar-otras-medidas]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const tipo = btn.getAttribute('data-generar-otras-medidas');
+      const filasBase = state.formulaColchones.filter(f=>f.tipoColchon===tipo && f.medida==='1.40');
+      if(!filasBase.length){ alert('Primero carga la fórmula de la medida 1.40 para este tipo.'); return; }
+      const medidasDestino = ['1.00','1.60','2.00'];
+      if(!confirm(`Esto va a generar (o reemplazar) la fórmula de 1.00, 1.60 y 2.00 para "${NOMBRES_TIPOS_COLCHON[tipo]}", calculada en proporción a la de 1.40. ¿Continuar?`)) return;
+      try{
+        const batch = db.batch();
+        // Borra fórmulas previas de esas medidas para ese tipo (para no duplicar)
+        state.formulaColchones.filter(f=>f.tipoColchon===tipo && medidasDestino.includes(f.medida)).forEach(f=>{
+          batch.delete(db.collection('formulaColchones').doc(f.id));
+        });
+        medidasDestino.forEach(medidaDestino=>{
+          const ratio = parseFloat(medidaDestino) / 1.40;
+          filasBase.forEach(f=>{
+            const nuevaRef = db.collection('formulaColchones').doc();
+            batch.set(nuevaRef, {
+              tipoColchon: tipo,
+              medida: medidaDestino,
+              material: f.material,
+              cantidadPorUnidad: Math.round(Number(f.cantidadPorUnidad) * ratio * 1000)/1000
+            });
+          });
+        });
+        await batch.commit();
+        alert('Fórmulas generadas para 1.00, 1.60 y 2.00.');
+      }catch(e){ alert('No se pudo generar: ' + e.message); }
+    };
+  });
+
   document.querySelectorAll('[data-editar-formula-colchon]').forEach(btn=>{
     btn.onclick = ()=>{ editandoFormulaColchonId = btn.getAttribute('data-editar-formula-colchon'); render(); };
   });
@@ -4328,17 +4410,27 @@ function attachHandlers(){
     btn.onclick = async ()=>{
       const nombreOriginal = btn.getAttribute('data-guardar-contacto');
       const nombre = document.getElementById('edit-ct-nombre').value.trim();
+      const esCliente = document.getElementById('edit-ct-es-cliente').checked;
+      const esProveedor = document.getElementById('edit-ct-es-proveedor').checked;
       const telefono = document.getElementById('edit-ct-telefono').value.trim();
       const documento = document.getElementById('edit-ct-documento').value.trim();
       const email = document.getElementById('edit-ct-email').value.trim();
       const direccion = document.getElementById('edit-ct-direccion').value.trim();
       if(!nombre) return;
+      if(!esCliente && !esProveedor){ alert('Marca al menos Cliente o Proveedor.'); return; }
       try{
         const datos = {nombre, telefono, documento, email, direccion};
         const clienteMatch = state.clientes.find(c=>c.nombre===nombreOriginal);
         const proveedorMatch = state.proveedoresCatalogo.find(p=>p.nombre===nombreOriginal);
-        if(clienteMatch) await db.collection('clientes').doc(clienteMatch.id).update(datos);
-        if(proveedorMatch) await db.collection('proveedores').doc(proveedorMatch.id).update(datos);
+
+        if(esCliente && clienteMatch) await db.collection('clientes').doc(clienteMatch.id).update(datos);
+        else if(esCliente && !clienteMatch) await db.collection('clientes').add(datos);
+        else if(!esCliente && clienteMatch) await db.collection('clientes').doc(clienteMatch.id).delete();
+
+        if(esProveedor && proveedorMatch) await db.collection('proveedores').doc(proveedorMatch.id).update(datos);
+        else if(esProveedor && !proveedorMatch) await db.collection('proveedores').add(datos);
+        else if(!esProveedor && proveedorMatch) await db.collection('proveedores').doc(proveedorMatch.id).delete();
+
         if(nombre !== nombreOriginal){ await unificarNombre([nombreOriginal], nombre); }
         editandoContactoNombre = null;
         render();
@@ -4396,7 +4488,13 @@ function attachHandlers(){
   });
 
   const vProductoSel = document.getElementById('v-producto');
-  if(vProductoSel) vProductoSel.onchange = ()=>{ ventaProducto = vProductoSel.value; ventaMedida = null; render(); };
+  if(vProductoSel) vProductoSel.onchange = ()=>{ ventaProducto = vProductoSel.value; ventaMedida = null; ventaMaterialSel = null; render(); };
+
+  const vMaterialSel = document.getElementById('v-material');
+  if(vMaterialSel){
+    if(!ventaMaterialSel) ventaMaterialSel = vMaterialSel.value;
+    vMaterialSel.onchange = ()=>{ ventaMaterialSel = vMaterialSel.value; render(); };
+  }
 
   const vTallaSel = document.getElementById('v-talla');
   if(vTallaSel) vTallaSel.onchange = ()=>{ ventaTalla = vTallaSel.value; render(); };
@@ -4416,6 +4514,7 @@ function attachHandlers(){
     const talla = document.getElementById('v-talla') ? document.getElementById('v-talla').value : null;
     const tipoParrilla = document.getElementById('v-tipo-parrilla') ? document.getElementById('v-tipo-parrilla').value : null;
     const medida = document.getElementById('v-medida') ? document.getElementById('v-medida').value : null;
+    const materialVendido = document.getElementById('v-material') ? document.getElementById('v-material').value : null;
     const cliente = document.getElementById('v-cliente').value;
     const fecha = document.getElementById('v-fecha').value || todayISO();
     const cmVendidos = document.getElementById('v-cm').value;
@@ -4423,6 +4522,7 @@ function attachHandlers(){
     const formaPago = document.getElementById('v-forma').value;
     const observaciones = document.getElementById('v-obs') ? document.getElementById('v-obs').value.trim() : '';
     if(!cliente || !cmVendidos) return;
+    if(producto==='material_suelto' && !materialVendido){ alert('Elige qué material vas a vender.'); return; }
     const total = Number(cmVendidos) * Number(precioPorCm);
     try{
       const numeroRemision = await obtenerSiguienteNumeroRemision();
@@ -4433,6 +4533,7 @@ function attachHandlers(){
       };
       if(producto==='parrillas' && talla){ ventaData.talla = talla; ventaData.tipoParrilla = tipoParrilla || 'estandar'; }
       if(medida) ventaData.medida = medida;
+      if(producto==='material_suelto' && materialVendido) ventaData.material = materialVendido;
       await db.collection('ventas').add(ventaData);
     }catch(e){ alert('No se pudo registrar la venta: ' + e.message); }
   };
