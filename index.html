@@ -1800,54 +1800,54 @@ const headerLogoEl = document.getElementById('headerLogo');
 if(headerLogoEl) headerLogoEl.src = LOGO_NUVORA_B64;
 function generarRemisionPDF(venta){
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({unit:'mm', format:'a4'});
-  const pageW = 210;
-  const margin = 15;
+  const doc = new jsPDF({unit:'mm', format:[148,210]}); // media hoja (A5)
+  const pageW = 148;
+  const margin = 10;
   const boxW = pageW - margin*2;
   const navy = [20, 40, 75];
   const numero = venta.numeroRemision ? String(venta.numeroRemision) : String(venta.id||'').slice(-6).toUpperCase();
 
   // ---- Encabezado (logo + datos empresa a la izquierda, REMISION a la derecha) ----
   const headerTop = margin;
-  const headerH = 52;
+  const headerH = 38;
 
-  try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', margin+2, headerTop+2, 30, 30); }catch(e){}
+  try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', margin+1, headerTop+1, 20, 20); }catch(e){}
 
   doc.setFont('helvetica','bold');
-  doc.setFontSize(9);
+  doc.setFontSize(7.5);
   doc.setTextColor(...navy);
-  doc.text('NUVORA COMFORT S.A.S', margin+2, headerTop+37);
+  doc.text('NUVORA COMFORT S.A.S', margin+1, headerTop+25);
   doc.setFont('helvetica','normal');
-  doc.setFontSize(8);
-  doc.text('NIT 9020856647', margin+2, headerTop+42);
-  doc.text('Sucursal Barranquilla', margin+2, headerTop+47);
-  doc.text('Bancolombia Ahorros 554-000154-24', margin+2, headerTop+52);
+  doc.setFontSize(6.5);
+  doc.text('NIT 9020856647', margin+1, headerTop+29);
+  doc.text('Sucursal Barranquilla', margin+1, headerTop+33);
+  doc.text('Bancolombia Ahorros 554-000154-24', margin+1, headerTop+37);
 
   doc.setFont('helvetica','bold');
-  doc.setFontSize(20);
-  doc.text('REMISION', margin+boxW-2, headerTop+12, {align:'right'});
+  doc.setFontSize(14);
+  doc.text('REMISION', margin+boxW-1, headerTop+9, {align:'right'});
 
   doc.setDrawColor(...navy);
-  doc.setLineWidth(0.4);
-  doc.rect(margin+boxW-46, headerTop+16, 46, 10);
+  doc.setLineWidth(0.35);
+  doc.rect(margin+boxW-34, headerTop+12, 34, 8);
   doc.setFont('helvetica','normal');
-  doc.setFontSize(10);
-  doc.text('N.', margin+boxW-42, headerTop+23);
+  doc.setFontSize(8);
+  doc.text('N.', margin+boxW-31, headerTop+17.5);
   doc.setFont('helvetica','bold');
-  doc.text(numero, margin+boxW-3, headerTop+23, {align:'right'});
+  doc.text(numero, margin+boxW-2, headerTop+17.5, {align:'right'});
 
   // ---- Datos del cliente (Fecha, Cliente, Direccion, Telefono) ----
   const cliente = state.clientes.find(c=>c.nombre===venta.cliente) || {};
-  let y = headerTop + headerH + 8;
-  doc.setFontSize(10);
+  let y = headerTop + headerH + 6;
+  doc.setFontSize(8);
   const campo = (label, valor) => {
     doc.setFont('helvetica','bold'); doc.setTextColor(...navy);
     doc.text(label, margin, y);
     doc.setFont('helvetica','normal');
-    doc.setLineWidth(0.2); doc.setDrawColor(...navy);
-    doc.line(margin+26, y+1, margin+boxW, y+1);
-    doc.text(String(valor||''), margin+28, y);
-    y += 8;
+    doc.setLineWidth(0.15); doc.setDrawColor(...navy);
+    doc.line(margin+18, y+0.8, margin+boxW, y+0.8);
+    doc.text(String(valor||''), margin+19, y);
+    y += 5.5;
   };
   campo('Fecha:', venta.fecha);
   campo('Cliente:', venta.cliente);
@@ -1855,51 +1855,56 @@ function generarRemisionPDF(venta){
   campo('Telefono:', cliente.telefono || '');
 
   // ---- Tabla ----
-  const tableY = y + 4;
+  const tableY = y + 3;
   doc.autoTable({
     startY: tableY,
     margin: {left: margin, right: margin},
-    head: [['CANTIDAD','DETALLE','VALOR UNITARIO','VALOR']],
+    head: [['CANT.','DETALLE','V. UNIT.','VALOR']],
     body: [[
       `${fmt(venta.cmVendidos)} ${esProductoUnidades(venta.producto) ? 'un.' : 'cm'}`,
-      `${nombreProducto(venta.producto)}${venta.talla ? ' talla '+venta.talla : ''}`,
+      `${nombreProducto(venta.producto, venta.material)}${venta.talla ? ' talla '+venta.talla : ''}${venta.medida ? ' '+venta.medida : ''}`,
       fmtMoney(venta.precioPorCm),
       fmtMoney(venta.total)
     ]],
     foot: [['', '', 'TOTAL', fmtMoney(venta.total)]],
     theme: 'grid',
-    headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold', halign: 'center' },
-    footStyles: { fillColor: [255,255,255], textColor: navy, fontStyle: 'bold', halign: 'right', lineWidth: 0.3, lineColor: navy },
-    styles: { lineColor: navy, lineWidth: 0.3, fontSize: 10, cellPadding: 4 },
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold', halign: 'center', fontSize: 7.5 },
+    footStyles: { fillColor: [255,255,255], textColor: navy, fontStyle: 'bold', halign: 'right', lineWidth: 0.25, lineColor: navy, fontSize: 8 },
+    styles: { lineColor: navy, lineWidth: 0.25, fontSize: 7.5, cellPadding: 2 },
   });
 
   // ---- Aprobado por ----
-  let afterTableY = doc.lastAutoTable.finalY + 8;
+  let afterTableY = doc.lastAutoTable.finalY + 6;
   doc.setFont('helvetica','normal');
-  doc.setFontSize(9);
+  doc.setFontSize(7);
   doc.setTextColor(...navy);
   doc.text(`Aprobado por: ${venta.creadoPor || '-'}`, margin, afterTableY);
+  if(venta.observaciones){
+    doc.text(`Obs: ${venta.observaciones}`, margin, afterTableY+4, {maxWidth: boxW});
+    afterTableY += 4;
+  }
 
   // ---- Firma y Sello / Recibido por ----
-  const finalY = afterTableY + 22;
+  const finalY = afterTableY + 14;
   doc.setFont('helvetica','bold');
-  doc.setFontSize(10);
+  doc.setFontSize(8);
   doc.text('Firma y Sello', margin, finalY);
-  doc.setLineWidth(0.2);
-  doc.line(margin, finalY+14, margin+62, finalY+14);
+  doc.setLineWidth(0.15);
+  doc.line(margin, finalY+10, margin+42, finalY+10);
 
-  const rightColX = margin + boxW/2;
+  const rightColX = margin + boxW/2 + 2;
   doc.setFont('helvetica','normal');
-  doc.text('Recibido por: ______________________', rightColX, finalY);
-  doc.text('CC: ______________________', rightColX, finalY+8);
-  doc.setFontSize(9);
-  doc.text('Recibi de conformidad', rightColX, finalY+16);
-  doc.text('a plena satisfaccion.', rightColX, finalY+21);
+  doc.setFontSize(7);
+  doc.text('Recibido por: ____________', rightColX, finalY);
+  doc.text('CC: ____________', rightColX, finalY+6);
+  doc.setFontSize(6.5);
+  doc.text('Recibi de conformidad', rightColX, finalY+11);
+  doc.text('a plena satisfaccion.', rightColX, finalY+14.5);
 
   // ---- Borde exterior (tamano correcto para todo el contenido) ----
-  const boxBottom = finalY + 30;
+  const boxBottom = finalY + 20;
   doc.setDrawColor(...navy);
-  doc.setLineWidth(0.6);
+  doc.setLineWidth(0.5);
   doc.rect(margin, margin, boxW, boxBottom - margin);
 
   const blob = doc.output('blob');
@@ -1908,9 +1913,9 @@ function generarRemisionPDF(venta){
 
 function generarRemisionRecibidoPDF(entrada){
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({unit:'mm', format:'a4'});
-  const pageW = 210;
-  const margin = 15;
+  const doc = new jsPDF({unit:'mm', format:[148,210]}); // media hoja (A5)
+  const pageW = 148;
+  const margin = 10;
   const boxW = pageW - margin*2;
   const navy = [20, 40, 75];
   const numero = entrada.numeroRecibido ? String(entrada.numeroRecibido) : String(entrada.id||'').slice(-6).toUpperCase();
@@ -1918,55 +1923,55 @@ function generarRemisionRecibidoPDF(entrada){
 
   // ---- Encabezado ----
   const headerTop = margin;
-  const headerH = 52;
+  const headerH = 38;
 
-  try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', margin+2, headerTop+2, 30, 30); }catch(e){}
+  try{ doc.addImage(LOGO_NUVORA_B64, 'PNG', margin+1, headerTop+1, 20, 20); }catch(e){}
 
   doc.setFont('helvetica','bold');
-  doc.setFontSize(9);
+  doc.setFontSize(7.5);
   doc.setTextColor(...navy);
-  doc.text('NUVORA COMFORT S.A.S', margin+2, headerTop+37);
+  doc.text('NUVORA COMFORT S.A.S', margin+1, headerTop+25);
   doc.setFont('helvetica','normal');
-  doc.setFontSize(8);
-  doc.text('NIT 9020856647', margin+2, headerTop+42);
-  doc.text('Sucursal Barranquilla', margin+2, headerTop+47);
-  doc.text('Bancolombia Ahorros 554-000154-24', margin+2, headerTop+52);
+  doc.setFontSize(6.5);
+  doc.text('NIT 9020856647', margin+1, headerTop+29);
+  doc.text('Sucursal Barranquilla', margin+1, headerTop+33);
+  doc.text('Bancolombia Ahorros 554-000154-24', margin+1, headerTop+37);
 
   doc.setFont('helvetica','bold');
-  doc.setFontSize(18);
-  doc.text('REMISION DE RECIBIDO', margin+boxW-2, headerTop+12, {align:'right'});
+  doc.setFontSize(11);
+  doc.text('REMISION DE RECIBIDO', margin+boxW-1, headerTop+9, {align:'right'});
 
   doc.setDrawColor(...navy);
-  doc.setLineWidth(0.4);
-  doc.rect(margin+boxW-46, headerTop+16, 46, 10);
+  doc.setLineWidth(0.35);
+  doc.rect(margin+boxW-34, headerTop+12, 34, 8);
   doc.setFont('helvetica','normal');
-  doc.setFontSize(10);
-  doc.text('N.', margin+boxW-42, headerTop+23);
+  doc.setFontSize(8);
+  doc.text('N.', margin+boxW-31, headerTop+17.5);
   doc.setFont('helvetica','bold');
-  doc.text(numero, margin+boxW-3, headerTop+23, {align:'right'});
+  doc.text(numero, margin+boxW-2, headerTop+17.5, {align:'right'});
 
   // ---- Datos del proveedor ----
-  let y = headerTop + headerH + 8;
-  doc.setFontSize(10);
+  let y = headerTop + headerH + 6;
+  doc.setFontSize(8);
   const campo = (label, valor) => {
     doc.setFont('helvetica','bold'); doc.setTextColor(...navy);
     doc.text(label, margin, y);
     doc.setFont('helvetica','normal');
-    doc.setLineWidth(0.2); doc.setDrawColor(...navy);
-    doc.line(margin+30, y+1, margin+boxW, y+1);
-    doc.text(String(valor||''), margin+32, y);
-    y += 8;
+    doc.setLineWidth(0.15); doc.setDrawColor(...navy);
+    doc.line(margin+22, y+0.8, margin+boxW, y+0.8);
+    doc.text(String(valor||''), margin+23, y);
+    y += 5.5;
   };
   campo('Fecha:', entrada.fecha);
   campo('Proveedor:', entrada.proveedor || '(sin nombre)');
   campo('Forma de pago:', entrada.formaPago==='credito' ? 'Fiado' : 'Efectivo');
 
   // ---- Tabla ----
-  const tableY = y + 4;
+  const tableY = y + 3;
   doc.autoTable({
     startY: tableY,
     margin: {left: margin, right: margin},
-    head: [['CANTIDAD RECIBIDA','MATERIAL','COSTO UNITARIO','COSTO TOTAL']],
+    head: [['CANT.','MATERIAL','C. UNIT.','C. TOTAL']],
     body: [[
       `${fmt(entrada.cantidad)} ${entrada.unidad||''}`,
       entrada.material,
@@ -1974,45 +1979,46 @@ function generarRemisionRecibidoPDF(entrada){
       costoTotal>0 ? fmtMoney(costoTotal) : '—'
     ]],
     theme: 'grid',
-    headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold', halign: 'center' },
-    styles: { lineColor: navy, lineWidth: 0.3, fontSize: 10, cellPadding: 4 },
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold', halign: 'center', fontSize: 7.5 },
+    styles: { lineColor: navy, lineWidth: 0.25, fontSize: 7.5, cellPadding: 2 },
   });
 
-  let afterTableY = doc.lastAutoTable.finalY + 8;
+  let afterTableY = doc.lastAutoTable.finalY + 6;
   if(entrada.observaciones){
     doc.setFont('helvetica','italic');
-    doc.setFontSize(9);
+    doc.setFontSize(7);
     doc.setTextColor(...navy);
-    doc.text(`Observaciones: ${entrada.observaciones}`, margin, afterTableY);
-    afterTableY += 8;
+    doc.text(`Observaciones: ${entrada.observaciones}`, margin, afterTableY, {maxWidth: boxW});
+    afterTableY += 5;
   }
 
   // ---- Recibido por (usuario que lo creó) ----
   doc.setFont('helvetica','normal');
-  doc.setFontSize(9);
+  doc.setFontSize(7);
   doc.setTextColor(...navy);
   doc.text(`Recibido por: ${entrada.creadoPor || '-'}`, margin, afterTableY);
 
   // ---- Firma y Sello / Entregado por (proveedor) ----
-  const finalY = afterTableY + 22;
+  const finalY = afterTableY + 14;
   doc.setFont('helvetica','bold');
-  doc.setFontSize(10);
+  doc.setFontSize(8);
   doc.text('Firma y Sello Nuvora', margin, finalY);
-  doc.setLineWidth(0.2);
-  doc.line(margin, finalY+14, margin+62, finalY+14);
+  doc.setLineWidth(0.15);
+  doc.line(margin, finalY+10, margin+42, finalY+10);
 
-  const rightColX = margin + boxW/2;
+  const rightColX = margin + boxW/2 + 2;
   doc.setFont('helvetica','normal');
-  doc.text('Entregado por: ______________________', rightColX, finalY);
-  doc.text('CC: ______________________', rightColX, finalY+8);
-  doc.setFontSize(9);
-  doc.text('Material recibido a', rightColX, finalY+16);
-  doc.text('plena satisfaccion.', rightColX, finalY+21);
+  doc.setFontSize(7);
+  doc.text('Entregado por: ____________', rightColX, finalY);
+  doc.text('CC: ____________', rightColX, finalY+6);
+  doc.setFontSize(6.5);
+  doc.text('Material recibido a', rightColX, finalY+11);
+  doc.text('plena satisfaccion.', rightColX, finalY+14.5);
 
   // ---- Borde exterior ----
-  const boxBottom = finalY + 30;
+  const boxBottom = finalY + 20;
   doc.setDrawColor(...navy);
-  doc.setLineWidth(0.6);
+  doc.setLineWidth(0.5);
   doc.rect(margin, margin, boxW, boxBottom - margin);
 
   const blob = doc.output('blob');
