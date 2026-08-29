@@ -827,11 +827,25 @@ function contactosConciliacion(){
     if(!leDebemosPorClave[clave]) leDebemosPorClave[clave] = {nombre:nombreOriginal, total:0};
     leDebemosPorClave[clave].total += saldoPendienteCompra(e);
   });
+  // Totales históricos de lo que ya se pagó/abonó (para dar contexto, no solo lo pendiente)
+  const meHanPagadoPorClave = {};
+  state.abonos.forEach(a=>{
+    const clave = normalizar(a.cliente);
+    meHanPagadoPorClave[clave] = (meHanPagadoPorClave[clave]||0) + Number(a.monto||0);
+  });
+  const leHePagadoPorClave = {};
+  state.pagosProveedor.forEach(p=>{
+    const clave = normalizar(p.proveedor||'');
+    leHePagadoPorClave[clave] = (leHePagadoPorClave[clave]||0) + Number(p.monto||0);
+  });
+
   const clavesComunes = Object.keys(meDebenPorClave).filter(k=> leDebemosPorClave[k] !== undefined);
   return clavesComunes.map(clave=>{
     const meDebe = meDebenPorClave[clave].total || 0;
     const leDebo = leDebemosPorClave[clave].total || 0;
-    return { nombre: meDebenPorClave[clave].nombre, nombreCliente: meDebenPorClave[clave].nombre, nombreProveedor: leDebemosPorClave[clave].nombre, meDebe, leDebo, neto: meDebe - leDebo };
+    const meHanPagado = meHanPagadoPorClave[clave] || 0;
+    const leHePagado = leHePagadoPorClave[clave] || 0;
+    return { nombre: meDebenPorClave[clave].nombre, nombreCliente: meDebenPorClave[clave].nombre, nombreProveedor: leDebemosPorClave[clave].nombre, meDebe, leDebo, meHanPagado, leHePagado, neto: meDebe - leDebo };
   }).sort((a,b)=> Math.abs(b.neto) - Math.abs(a.neto));
 }
 
@@ -2698,13 +2712,15 @@ function exportConciliacionPDF(){
   } else {
     const body = contactos.map(c=>[
       c.nombre,
-      fmtMoney(c.meDebe),
       fmtMoney(c.leDebo),
+      fmtMoney(c.meDebe),
+      fmtMoney(c.leHePagado),
+      fmtMoney(c.meHanPagado),
       (c.neto>=0 ? 'Me debe ' : 'Le debo ') + fmtMoney(Math.abs(c.neto))
     ]);
     doc.autoTable({
       startY,
-      head:[['Contacto','Me debe (cliente)','Le debo (proveedor)','Saldo neto a conciliar']],
+      head:[['Contacto','Le debo (compras)','Me debe (ventas)','Le he pagado','Me ha pagado','Saldo neto']],
       body,
       theme:'striped', headStyles:{fillColor:[31,78,121]}, styles:{fontSize:9},
       foot:[['TOTAL', fmtMoney(totalMeDeben), fmtMoney(totalLeDebemos), (totalNeto>=0?'Me deben ':'Debo ') + fmtMoney(Math.abs(totalNeto))]],
@@ -2796,7 +2812,7 @@ function renderConsolidacionCartera(){
     if(expandido){
       const ventasCliente = ventasConSaldoPendiente().filter(v=>v.cliente===c.nombreCliente).sort((a,b)=>a.fecha.localeCompare(b.fecha));
       const comprasProveedor = comprasConSaldoPendiente().filter(e=>(e.proveedor||'(sin nombre)')===c.nombreProveedor).sort((a,b)=>a.fecha.localeCompare(b.fecha));
-      filaDetalle = `<tr><td colspan="5" style="background:var(--paper);">
+      filaDetalle = `<tr><td colspan="6" style="background:var(--paper);">
         <div style="display:flex; gap:16px; flex-wrap:wrap; padding:8px 4px;">
           <div style="flex:1; min-width:220px;">
             <div style="font-weight:700; font-size:12px; margin-bottom:4px;">Me debe (ventas pendientes)</div>
@@ -2811,8 +2827,10 @@ function renderConsolidacionCartera(){
     }
     return `<tr data-search-row="consolidacion" data-search-text="${c.nombre.toLowerCase()}">
       <td style="cursor:pointer;" data-toggle-conc="${c.nombre}">${expandido?'▾':'▸'} ${c.nombreCliente}${c.nombreCliente!==c.nombreProveedor ? `<br><span style="font-size:10px;color:var(--ink-soft);">(como proveedor: ${c.nombreProveedor})</span>` : ''}</td>
-      <td class="num">${fmtMoney(c.meDebe)}</td>
       <td class="num">${fmtMoney(c.leDebo)}</td>
+      <td class="num">${fmtMoney(c.meDebe)}</td>
+      <td class="num" style="color:var(--ink-soft);">${fmtMoney(c.leHePagado)}</td>
+      <td class="num" style="color:var(--ink-soft);">${fmtMoney(c.meHanPagado)}</td>
       <td class="num" style="font-weight:600; color:${c.neto>=0?'var(--green,#2C8C8C)':'var(--red)'};">${c.neto>=0?'Me debe ':'Le debo '}${fmtMoney(Math.abs(c.neto))}</td>
     </tr>${filaDetalle}`;
   }).join('');
@@ -2825,15 +2843,15 @@ function renderConsolidacionCartera(){
 
   <div class="card">
     <div class="card-title">Consolidación de Cartera</div>
-    <div class="card-desc">Contactos que son cliente y proveedor a la vez: lo que te deben como cliente vs. lo que les debes como proveedor, para saber quién le debe a quién. Toca un nombre para ver el detalle de facturas y compras. El nombre debe coincidir exactamente entre "Cliente" y "Proveedor".</div>
+    <div class="card-desc">Contactos que son cliente y proveedor a la vez: lo que le debes (compras pendientes), lo que te debe (ventas pendientes), y lo que ya se han pagado el uno al otro. Toca un nombre para ver el detalle. El nombre debe coincidir exactamente entre "Cliente" y "Proveedor".</div>
     <div style="padding:0 16px 12px;"><input type="text" placeholder="🔍 Buscar contacto..." data-search-input="consolidacion" style="width:100%; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);"></div>
-    ${contactosConc.length ? `<table><thead><tr><th>Contacto</th><th>Me debe</th><th>Le debo</th><th>Saldo neto</th></tr></thead>
-    <tbody>${rowsConciliacion}<tr data-search-empty="consolidacion"><td colspan="4" class="empty">Escribe arriba para buscar</td></tr>
+    ${contactosConc.length ? `<div style="overflow-x:auto;"><table><thead><tr><th>Contacto</th><th>Le debo (compras)</th><th>Me debe (ventas)</th><th>Le he pagado</th><th>Me ha pagado</th><th>Saldo neto</th></tr></thead>
+    <tbody>${rowsConciliacion}<tr data-search-empty="consolidacion"><td colspan="6" class="empty">Escribe arriba para buscar</td></tr>
       <tr style="font-weight:700; background:var(--paper-soft,rgba(0,0,0,.03));">
-        <td>TOTAL</td><td class="num">${fmtMoney(totalMeDebenConc)}</td><td class="num">${fmtMoney(totalLeDebemosConc)}</td>
+        <td>TOTAL</td><td class="num">${fmtMoney(totalLeDebemosConc)}</td><td class="num">${fmtMoney(totalMeDebenConc)}</td><td class="num">${fmtMoney(contactosConc.reduce((s,c)=>s+c.leHePagado,0))}</td><td class="num">${fmtMoney(contactosConc.reduce((s,c)=>s+c.meHanPagado,0))}</td>
         <td class="num">${totalNetoConc>=0?'Me deben ':'Debo '}${fmtMoney(Math.abs(totalNetoConc))}</td>
       </tr>
-    </tbody></table>` : `<div class="empty" style="padding:0 16px 12px;">No hay contactos que aparezcan como cliente y proveedor a la vez con saldo pendiente.</div>`}
+    </tbody></table></div>` : `<div class="empty" style="padding:0 16px 12px;">No hay contactos que aparezcan como cliente y proveedor a la vez con saldo pendiente.</div>`}
     <div style="padding:0 16px 16px;">
       <button class="export-btn" id="conciliacion-pdf" style="width:100%; text-align:center;">⬇ Descargar Consolidado (PDF)</button>
     </div>
