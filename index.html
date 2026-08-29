@@ -1065,6 +1065,51 @@ function attachSearchFilters(){
   });
 }
 
+let busquedaRemisionNumero = '';
+
+function buscarPorNumeroRemision(numero){
+  const limpio = String(numero||'').trim().replace(/^[VvCc]/, '');
+  if(!limpio) return { ventas: [], compras: [] };
+  const ventas = state.ventas.filter(v=> String(v.numeroRemision||'').replace(/^[VvCc]/,'') === limpio);
+  const compras = state.entradas.filter(e=> String(e.numeroRecibido||'').replace(/^[VvCc]/,'') === limpio);
+  return { ventas, compras };
+}
+
+function renderBuscarRemision(){
+  const resultado = busquedaRemisionNumero ? buscarPorNumeroRemision(busquedaRemisionNumero) : {ventas:[], compras:[]};
+  const encontrado = resultado.ventas.length>0 || resultado.compras.length>0;
+
+  let filasResultado = '';
+  resultado.ventas.forEach(v=>{
+    filasResultado += `<tr>
+      <td><span style="background:var(--blue); color:white; font-size:10px; padding:2px 6px; border-radius:8px;">VENTA</span></td>
+      <td>${v.fecha}</td><td>${v.numeroRemision||'—'}</td><td>${v.cliente}</td>
+      <td>${nombreProducto(v.producto, v.material)}</td>
+      <td class="num">${fmtMoney(v.total)}</td>
+      <td><button class="del-btn" data-imprimir-remision-venta="${v.id}" title="Ver/Imprimir">🖨️</button></td>
+    </tr>`;
+  });
+  resultado.compras.forEach(e=>{
+    filasResultado += `<tr>
+      <td><span style="background:var(--red); color:white; font-size:10px; padding:2px 6px; border-radius:8px;">COMPRA</span></td>
+      <td>${e.fecha}</td><td>${e.numeroRecibido||'—'}</td><td>${e.proveedor||'(sin nombre)'}</td>
+      <td>${e.material}</td>
+      <td class="num">${fmtMoney(costoTotalEntrada(e))}</td>
+      <td><button class="del-btn" data-imprimir-remision-compra="${e.id}" title="Ver/Imprimir">🖨️</button></td>
+    </tr>`;
+  });
+
+  return `<div class="card">
+    <div class="card-title">Buscar Remisión por Número</div>
+    <div class="card-desc">Escribe el número (con o sin la letra V/C) y te dice si es una venta o una compra, con todos sus datos. Los números antiguos (antes de la letra) también se encuentran.</div>
+    <div style="padding:0 16px 16px; display:flex; gap:8px;">
+      <input type="text" id="buscar-remision-input" placeholder="Ej: 54 o V54 o C12" value="${busquedaRemisionNumero}" style="flex:1; font-size:14px; padding:9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink);">
+      <button class="add-btn" id="buscar-remision-btn" style="margin-top:0;">Buscar</button>
+    </div>
+    ${busquedaRemisionNumero ? (encontrado ? `<table><thead><tr><th>Tipo</th><th>Fecha</th><th>N°</th><th>Contacto</th><th>Detalle</th><th>Monto</th><th></th></tr></thead><tbody>${filasResultado}</tbody></table>` : `<div class="empty" style="padding:0 16px 16px;">No se encontró ninguna venta ni compra con el número "${busquedaRemisionNumero}".</div>`) : ''}
+  </div>`;
+}
+
 function renderDashboard(){
   const alertas = state.materiales.filter(m=>stockMaterial(m.nombre) < Number(m.stockMinimo));
   const {cm, limitante} = produccionCasata();
@@ -1072,7 +1117,7 @@ function renderDashboard(){
   const totalBloques = state.produccion.reduce((s,p)=>s+Number(p.bloques),0);
   const totalCm = state.produccion.reduce((s,p)=>s+Number(p.cmTotal||0),0);
 
-  let html = '';
+  let html = renderBuscarRemision();
   if(alertas.length===0 && state.materiales.length>0){
     html += `<div class="alert-banner ok">✓ Todo tu inventario está por encima del mínimo.</div>`;
   } else if(alertas.length>0){
@@ -4982,6 +5027,30 @@ function attachHandlers(){
 
   const historicoPdf = document.getElementById('historico-pdf');
   if(historicoPdf) historicoPdf.onclick = ()=>{ try{ exportHistoricoPDF(historicoContactoSel, historicoDesde, historicoHasta); }catch(e){ alert('No se pudo exportar: ' + e.message); } };
+
+  const buscarRemisionBtn = document.getElementById('buscar-remision-btn');
+  if(buscarRemisionBtn) buscarRemisionBtn.onclick = ()=>{
+    busquedaRemisionNumero = document.getElementById('buscar-remision-input').value.trim();
+    render();
+  };
+  const buscarRemisionInput = document.getElementById('buscar-remision-input');
+  if(buscarRemisionInput) buscarRemisionInput.onkeydown = (ev)=>{
+    if(ev.key==='Enter'){ busquedaRemisionNumero = buscarRemisionInput.value.trim(); render(); }
+  };
+  document.querySelectorAll('[data-imprimir-remision-venta]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const id = btn.getAttribute('data-imprimir-remision-venta');
+      const venta = state.ventas.find(v=>v.id===id);
+      if(venta){ try{ generarRemisionPDF(venta); }catch(e){ alert('No se pudo generar: ' + e.message); } }
+    };
+  });
+  document.querySelectorAll('[data-imprimir-remision-compra]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const id = btn.getAttribute('data-imprimir-remision-compra');
+      const entrada = state.entradas.find(e=>e.id===id);
+      if(entrada){ try{ generarRemisionRecibidoPDF(entrada); }catch(e){ alert('No se pudo generar: ' + e.message); } }
+    };
+  });
 
   const respaldoBtn = document.getElementById('respaldo-completo-btn');
   if(respaldoBtn) respaldoBtn.onclick = ()=>{ try{ exportarRespaldoCompleto(); }catch(e){ alert('No se pudo generar el respaldo: ' + e.message); } };
