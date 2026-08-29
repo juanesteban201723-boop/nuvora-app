@@ -278,6 +278,7 @@ let state = {
   proveedoresCatalogo: [],
   ventas: [],
   gastos: [],
+  activos: [],
   abonos: [],
   capital: [],
   pagosCapital: [],
@@ -439,6 +440,7 @@ const ALL_TABS = [
   {id:'historico', label:'Histórico'},
   {id:'administrativo', label:'Administrativo'},
   {id:'gastos', label:'Gastos'},
+  {id:'activos', label:'Activos'},
   {id:'finanzas', label:'Finanzas'},
   {id:'reportes', label:'Reportes'},
 ];
@@ -624,6 +626,10 @@ function startListeners(){
   }));
   unsubscribers.push(db.collection('gastos').onSnapshot(snap=>{
     state.gastos = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    render();
+  }));
+  unsubscribers.push(db.collection('activos').onSnapshot(snap=>{
+    state.activos = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   }));
   unsubscribers.push(db.collection('abonos').onSnapshot(snap=>{
@@ -878,6 +884,7 @@ function totalPrestamosRecibidos(){
 
 // ---------- Administrativo (gastos y P&L) ----------
 const CATEGORIAS_GASTO = ['Arriendo','Servicios Públicos','Nómina/Empleados','Transporte','Mantenimiento','Publicidad','Seguros','Impuestos','Insumos de Oficina','Otro'];
+const CATEGORIAS_ACTIVO = ['Maquinaria','Vehículos','Muebles y Enseres','Equipos de Cómputo','Herramientas','Inmuebles','Otro'];
 
 function filtrarPorMes(arr, mes){
   return arr.filter(x=> x.fecha && x.fecha.slice(0,7)===mes);
@@ -1029,6 +1036,7 @@ function renderPanels(){
   if(activeTab==='historico') div.innerHTML = renderHistorico();
   if(activeTab==='administrativo') div.innerHTML = renderAdministrativo();
   if(activeTab==='gastos') div.innerHTML = renderGastos();
+  if(activeTab==='activos') div.innerHTML = renderActivos();
   if(activeTab==='finanzas') div.innerHTML = renderFinanzas();
   if(activeTab==='reportes') div.innerHTML = renderReportes();
   if(activeTab==='usuarios') div.innerHTML = renderUsuarios();
@@ -1766,7 +1774,15 @@ function renderInventario(){
   const formHtml = canEdit ? `
     <div class="form-grid">
       <div class="full"><label>Material</label>
-        <select id="e-material">${options || '<option value="">Pide al administrador que cargue materiales</option>'}</select>
+        <select id="e-material">${options || (myRole!=='admin' ? '<option value="">Pide al administrador que cargue materiales</option>' : '')}${myRole==='admin' ? '<option value="__nuevo__">+ Crear material nuevo</option>' : ''}</select>
+      </div>
+      <div class="full" id="e-nuevo-material-campos" style="display:none; border:1px dashed var(--line); border-radius:6px; padding:10px; background:var(--paper);">
+        <div class="form-grid">
+          <div class="full"><label>Nombre del material nuevo</label><input id="e-nuevo-nombre" placeholder="Ej: Tela Yacar"></div>
+          <div><label>Tipo</label><input id="e-nuevo-tipo" placeholder="Ej: Tela, Espuma, Químico"></div>
+          <div><label>Unidad</label><input id="e-nuevo-unidad" placeholder="Ej: mts, kg, unidad"></div>
+          <div class="full"><label>Stock mínimo (opcional)</label><input id="e-nuevo-minimo" type="number" step="any" placeholder="0"></div>
+        </div>
       </div>
       <div><label>Fecha</label><input id="e-fecha" type="date" value="${todayISO()}"></div>
       <div><label>Cantidad recibida</label><input id="e-cantidad" type="number" step="any"></div>
@@ -3243,7 +3259,7 @@ function renderAsistente(){
   } else if(asistConcepto==='Aporte de socio' || asistConcepto==='Préstamo recibido'){
     html += `<div class="form-grid">
       <div><label>Fecha</label><input id="asist-fecha" type="date" value="${todayISO()}"></div>
-      <div><label>Socio</label><input id="asist-socio" placeholder="Ej: Julian Gómez"></div>
+      <div><label>Socio</label><input id="asist-socio" placeholder="Ej: nombre del socio"></div>
       <div class="full"><label>Monto ($)</label><input id="asist-monto" type="number" step="any"></div>
       <button class="add-btn" id="asist-submit" style="grid-column:1/-1;">Registrar</button>
     </div>`;
@@ -3376,6 +3392,75 @@ async function unificarNombre(variantes, nombreCanonico){
 }
 
 // ---------- Gastos (independiente de Administrativo) ----------
+let editandoActivoId = null;
+
+// ---------- Activos (bienes de la empresa: maquinaria, vehículos, equipos, etc.) ----------
+function renderActivos(){
+  const canEdit = myRole==='admin' || myRole==='administrativo';
+  const soloAdmin = myRole==='admin';
+
+  let rows = state.activos.slice().sort((a,b)=> (b.fechaAdquisicion||'').localeCompare(a.fechaAdquisicion||'')).map(a=>{
+    let filaEdicion = '';
+    if(soloAdmin && editandoActivoId===a.id){
+      filaEdicion = `<tr><td colspan="5" style="background:var(--paper);">
+        <div class="form-grid">
+          <div class="full"><label>Nombre</label><input id="edit-ac-nombre" value="${a.nombre}"></div>
+          <div><label>Categoría</label>
+            <select id="edit-ac-categoria">${CATEGORIAS_ACTIVO.map(c=>`<option value="${c}" ${c===a.categoria?'selected':''}>${c}</option>`).join('')}</select>
+          </div>
+          <div><label>Valor ($)</label><input id="edit-ac-valor" type="number" step="any" value="${a.valor}"></div>
+          <div><label>Fecha de adquisición</label><input id="edit-ac-fecha" type="date" value="${a.fechaAdquisicion||''}"></div>
+          <div class="full"><label>Observaciones</label><input id="edit-ac-obs" value="${a.observaciones||''}"></div>
+          <button class="add-btn" data-guardar-activo="${a.id}" style="grid-column:1/-1;">Guardar</button>
+          <button class="export-btn" data-cancelar-activo style="grid-column:1/-1;">Cancelar</button>
+        </div>
+      </td></tr>`;
+    }
+    return `<tr>
+      <td><strong>${a.nombre}</strong><br><span style="font-size:10.5px;color:var(--ink-soft)">${a.categoria}${a.observaciones?' · '+a.observaciones:''}</span></td>
+      <td>${a.fechaAdquisicion||''}</td>
+      <td class="num">${fmtMoney(a.valor)}</td>
+      <td>${soloAdmin ? `<button class="del-btn" data-editar-activo="${a.id}" title="Editar">✏️</button><button class="del-btn" data-del-col="activos" data-id="${a.id}">✕</button>` : ''}</td>
+    </tr>${filaEdicion}`;
+  }).join('');
+  if(!rows) rows = `<tr><td colspan="4" class="empty">Sin activos registrados aún</td></tr>`;
+
+  const totalActivos = state.activos.reduce((s,a)=>s+Number(a.valor||0),0);
+
+  // Agrupado por categoría, para dar un vistazo rápido
+  const porCategoria = {};
+  state.activos.forEach(a=>{
+    porCategoria[a.categoria] = (porCategoria[a.categoria]||0) + Number(a.valor||0);
+  });
+  const resumenCategorias = Object.keys(porCategoria).sort((x,y)=>porCategoria[y]-porCategoria[x]).map(cat=>
+    `<div class="balance-card"><div class="label">${cat}</div><div class="val">${fmtMoney(porCategoria[cat])}</div></div>`
+  ).join('');
+
+  const catOptions = CATEGORIAS_ACTIVO.map(c=>`<option value="${c}">${c}</option>`).join('');
+
+  return `<div class="hero-card">
+    <div class="label">Valor total de activos</div>
+    <div class="amount">${fmtMoney(totalActivos)}</div>
+  </div>
+
+  ${resumenCategorias ? `<div class="balance-grid">${resumenCategorias}</div>` : ''}
+
+  <div class="card">
+    <div class="card-title">Activos de la Empresa</div>
+    <div class="card-desc">Maquinaria, vehículos, equipos, muebles y demás bienes que posee la empresa (no se venden en el día a día, a diferencia del inventario).</div>
+    <table><thead><tr><th>Activo</th><th>Adquirido</th><th>Valor</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    ${canEdit ? `<div class="form-grid">
+      <div class="full"><label>Nombre del activo</label><input id="ac-nombre" placeholder="Ej: Camión de reparto, Máquina cortadora"></div>
+      <div><label>Categoría</label><select id="ac-categoria">${catOptions}</select></div>
+      <div><label>Valor ($)</label><input id="ac-valor" type="number" step="any"></div>
+      <div><label>Fecha de adquisición</label><input id="ac-fecha" type="date" value="${todayISO()}"></div>
+      <div class="full"><label>Observaciones (opcional)</label><input id="ac-obs" placeholder="Ej: placa, número de serie, estado"></div>
+      <button class="add-btn" id="ac-add">+ Agregar activo</button>
+    </div>` : ''}
+  </div>`;
+}
+
 function renderGastos(){
   const canEdit = myRole==='admin' || myRole==='administrativo';
   let rows = state.gastos.slice().sort((a,b)=> b.fecha.localeCompare(a.fecha)).map(g=>{
@@ -3633,7 +3718,7 @@ function renderAdministrativo(){
     <table><thead><tr><th>Socio</th><th>Monto</th><th>Estado</th><th></th></tr></thead><tbody>${capitalRows}</tbody></table>
     <div class="form-grid">
       <div><label>Fecha</label><input id="cap-fecha" type="date" value="${todayISO()}"></div>
-      <div><label>Socio</label><input id="cap-socio" placeholder="Ej: Julian Gómez"></div>
+      <div><label>Socio</label><input id="cap-socio" placeholder="Ej: nombre del socio"></div>
       <div><label>Tipo</label>
         <select id="cap-tipo"><option value="Aporte">Aporte (capital)</option><option value="Préstamo">Préstamo (se devuelve)</option></select>
       </div>
@@ -4149,6 +4234,7 @@ function exportarRespaldoCompleto(){
     proveedoresCatalogo: state.proveedoresCatalogo,
     ventas: state.ventas,
     gastos: state.gastos,
+    activos: state.activos,
     abonos: state.abonos,
     capital: state.capital,
     pagosCapital: state.pagosCapital,
@@ -4475,17 +4561,37 @@ function attachHandlers(){
     };
   });
 
+  const eMaterialSel = document.getElementById('e-material');
+  if(eMaterialSel) eMaterialSel.onchange = ()=>{
+    const campos = document.getElementById('e-nuevo-material-campos');
+    if(campos) campos.style.display = (eMaterialSel.value==='__nuevo__') ? 'block' : 'none';
+  };
+
   const eAdd = document.getElementById('e-add');
   if(eAdd) eAdd.onclick = async ()=>{
     const sel = document.getElementById('e-material');
-    const material = sel.value;
-    const unidad = sel.selectedOptions[0] ? sel.selectedOptions[0].getAttribute('data-unidad') : 'kg';
+    let material = sel.value;
+    let unidad = sel.selectedOptions[0] ? sel.selectedOptions[0].getAttribute('data-unidad') : 'kg';
     const fecha = document.getElementById('e-fecha').value || todayISO();
     const cantidad = document.getElementById('e-cantidad').value;
     const costoUnitario = Number(document.getElementById('e-costo') ? document.getElementById('e-costo').value : 0) || 0;
     const formaPago = document.getElementById('e-forma') ? document.getElementById('e-forma').value : 'efectivo';
     const proveedor = document.getElementById('e-proveedor') ? document.getElementById('e-proveedor').value.trim() : '';
     const observaciones = document.getElementById('e-obs') ? document.getElementById('e-obs').value.trim() : '';
+
+    if(material==='__nuevo__'){
+      const nuevoNombre = document.getElementById('e-nuevo-nombre').value.trim();
+      const nuevoTipo = document.getElementById('e-nuevo-tipo').value.trim();
+      const nuevaUnidad = document.getElementById('e-nuevo-unidad').value.trim();
+      const nuevoMinimo = Number(document.getElementById('e-nuevo-minimo').value) || 0;
+      if(!nuevoNombre || !nuevoTipo || !nuevaUnidad){ alert('Completa nombre, tipo y unidad del material nuevo.'); return; }
+      try{
+        await db.collection('materiales').add({nombre:nuevoNombre, tipo:nuevoTipo, unidad:nuevaUnidad, stockInicial:0, stockMinimo:nuevoMinimo, costoInicial:0});
+      }catch(e){ alert('No se pudo crear el material: ' + e.message); return; }
+      material = nuevoNombre;
+      unidad = nuevaUnidad;
+    }
+
     if(!material || !cantidad) return;
     const costoTotal = Number(cantidad)*costoUnitario;
     try{
@@ -4948,6 +5054,40 @@ function attachHandlers(){
   };
   const reportesExcelBtn = document.getElementById('reportes-excel');
   if(reportesExcelBtn) reportesExcelBtn.onclick = ()=>{ try{ exportReportesProductoExcel(); }catch(e){ alert('No se pudo exportar: ' + e.message); } };
+
+  const acAdd = document.getElementById('ac-add');
+  if(acAdd) acAdd.onclick = async ()=>{
+    const nombre = document.getElementById('ac-nombre').value.trim();
+    const categoria = document.getElementById('ac-categoria').value;
+    const valor = Number(document.getElementById('ac-valor').value);
+    const fechaAdquisicion = document.getElementById('ac-fecha').value || todayISO();
+    const observaciones = document.getElementById('ac-obs').value.trim();
+    if(!nombre || !valor) return;
+    try{ await db.collection('activos').add({nombre, categoria, valor, fechaAdquisicion, observaciones}); }
+    catch(e){ alert('No se pudo agregar el activo: ' + e.message); }
+  };
+  document.querySelectorAll('[data-editar-activo]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoActivoId = btn.getAttribute('data-editar-activo'); render(); };
+  });
+  document.querySelectorAll('[data-cancelar-activo]').forEach(btn=>{
+    btn.onclick = ()=>{ editandoActivoId = null; render(); };
+  });
+  document.querySelectorAll('[data-guardar-activo]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const id = btn.getAttribute('data-guardar-activo');
+      const nombre = document.getElementById('edit-ac-nombre').value.trim();
+      const categoria = document.getElementById('edit-ac-categoria').value;
+      const valor = Number(document.getElementById('edit-ac-valor').value);
+      const fechaAdquisicion = document.getElementById('edit-ac-fecha').value;
+      const observaciones = document.getElementById('edit-ac-obs').value.trim();
+      if(!nombre || !valor) return;
+      try{
+        await db.collection('activos').doc(id).update({nombre, categoria, valor, fechaAdquisicion, observaciones});
+        editandoActivoId = null;
+        render();
+      }catch(e){ alert('No se pudo guardar: ' + e.message); }
+    };
+  });
 
   const gAdd = document.getElementById('g-add');
   if(gAdd) gAdd.onclick = async ()=>{
