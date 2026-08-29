@@ -432,8 +432,7 @@ const ALL_TABS = [
   {id:'produccionParrillas', label:'Producción Parrillas'},
   {id:'produccionEnsamblador', label:'Producción Ensamblador'},
   {id:'ventas', label:'Ventas'},
-  {id:'clientes', label:'Clientes'},
-  {id:'proveedores', label:'Proveedores'},
+  {id:'contactos', label:'Clientes / Proveedores / Otros'},
   {id:'cartera', label:'Cartera'},
   {id:'consolidacion', label:'Consolidación de Cartera'},
   {id:'historico', label:'Histórico'},
@@ -1003,8 +1002,7 @@ function renderPanels(){
   if(activeTab==='produccionParrillas') div.innerHTML = renderProduccionParrillas();
   if(activeTab==='produccionEnsamblador') div.innerHTML = renderProduccionEnsamblador();
   if(activeTab==='ventas') div.innerHTML = renderVentas();
-  if(activeTab==='clientes') div.innerHTML = renderClientes();
-  if(activeTab==='proveedores') div.innerHTML = renderProveedoresCatalogo();
+  if(activeTab==='contactos') div.innerHTML = renderContactos();
   if(activeTab==='cartera') div.innerHTML = renderCartera();
   if(activeTab==='consolidacion') div.innerHTML = renderConsolidacionCartera();
   if(activeTab==='historico') div.innerHTML = renderHistorico();
