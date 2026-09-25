@@ -1752,7 +1752,7 @@ function renderInventario(){
       </td></tr>`;
     }
     return `<tr>
-      <td>${e.fecha}${e.proveedor?`<br><span style="font-size:10.5px;color:var(--ink-soft)">${e.proveedor}</span>`:''}${e.observaciones?`<br><span style="font-size:10px;color:var(--ink-soft);font-style:italic;">${e.observaciones}</span>`:''}</td>
+      <td>${e.fecha}${(e.proveedor||e.numeroRecibido)?`<br><span style="font-size:10.5px;color:var(--ink-soft)">${e.numeroRecibido?`<b>${e.numeroRecibido}</b> · `:''}${e.proveedor||''}</span>`:''}${e.observaciones?`<br><span style="font-size:10px;color:var(--ink-soft);font-style:italic;">${e.observaciones}</span>`:''}</td>
       <td>${e.material}</td>
       <td class="num">+${fmt(e.cantidad)} ${e.unidad||''}</td>
       <td class="num">${costoTotal>0?fmtMoney(costoTotal):'—'}</td>
@@ -1784,25 +1784,34 @@ function renderInventario(){
           <div class="full"><label>Stock mínimo (opcional)</label><input id="e-nuevo-minimo" type="number" step="any" placeholder="0"></div>
         </div>
       </div>
-      <div><label>Fecha</label><input id="e-fecha" type="date" value="${todayISO()}"></div>
+      <div><label>Fecha</label><input id="e-fecha" type="date" value="${compraCab.fecha || todayISO()}"></div>
       <div><label>Cantidad recibida</label><input id="e-cantidad" type="number" step="any"></div>
       <div class="full"><label>Costo unitario ($ por kg/ml, opcional)</label><input id="e-costo" type="number" step="any" placeholder="Ej: 1900"></div>
       <div>
         <label>Forma de pago</label>
         <select id="e-forma">
-          <option value="efectivo">Efectivo (ya pagado)</option>
-          <option value="credito">Fiado (le debo al proveedor)</option>
+          <option value="efectivo" ${compraCab.forma!=='credito'?'selected':''}>Efectivo (ya pagado)</option>
+          <option value="credito" ${compraCab.forma==='credito'?'selected':''}>Fiado (le debo al proveedor)</option>
         </select>
       </div>
       <div><label>Proveedor (si es fiado)</label>
         <select id="e-proveedor">
           <option value="">-- Sin proveedor / efectivo --</option>
-          ${state.proveedoresCatalogo.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>`<option value="${p.nombre}">${p.nombre}</option>`).join('')}
+          ${state.proveedoresCatalogo.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>`<option value="${p.nombre}" ${p.nombre===compraCab.proveedor?'selected':''}>${p.nombre}</option>`).join('')}
         </select>
         <div style="font-size:11px; color:var(--ink-soft); margin-top:4px;">¿No aparece? Créalo primero en Administrativo → Catálogo de Proveedores.</div>
       </div>
-      <div class="full"><label>Observaciones (opcional)</label><input id="e-obs" placeholder="Ej: llegó con 2 rollos dañados"></div>
-      <button class="add-btn" id="e-add">+ Registrar entrada</button>
+      <div class="full"><label>Observaciones (opcional)</label><input id="e-obs" value="${(compraCab.obs||'').replace(/"/g,'&quot;')}" placeholder="Ej: llegó con 2 rollos dañados"></div>
+      <button class="export-btn" id="e-add-item" style="grid-column:1/-1;">+ Agregar este material a la remisión</button>
+      ${carritoCompra.length ? `
+      <div class="full" style="border:1px solid var(--line); border-radius:6px; padding:8px; background:var(--paper);">
+        <div style="font-weight:700; font-size:12px; margin-bottom:6px;">🧾 Materiales en esta remisión (${carritoCompra.length})</div>
+        <table><thead><tr><th>Cant.</th><th>Material</th><th>C. unit.</th><th>C. total</th><th></th></tr></thead><tbody>
+        ${carritoCompra.map((it,i)=>`<tr><td class="num">${fmt(it.cantidad)} ${it.unidad||''}</td><td>${it.material}</td><td class="num">${it.costoUnitario?fmtMoney(it.costoUnitario):'—'}</td><td class="num">${it.costoTotal?fmtMoney(it.costoTotal):'—'}</td><td><button class="del-btn" data-quitar-item-compra="${i}" title="Quitar">✕</button></td></tr>`).join('')}
+        <tr><td colspan="3" style="text-align:right; font-weight:700;">TOTAL</td><td class="num" style="font-weight:700;">${fmtMoney(carritoCompra.reduce((a,it)=>a+it.costoTotal,0))}</td><td></td></tr>
+        </tbody></table>
+      </div>` : ''}
+      <button class="add-btn" id="e-add">✔ Registrar remisión de compra${carritoCompra.length?` (${carritoCompra.length} material${carritoCompra.length>1?'es':''})`:''}</button>
     </div>` : '';
 
   return `${toolbar}<div class="card">
@@ -1895,6 +1904,11 @@ function generarRemisionPDF(venta){
   const boxW = pageW - margin*2;
   const navy = [20, 40, 75];
   const numero = venta.numeroRemision ? String(venta.numeroRemision) : String(venta.id||'').slice(-6).toUpperCase();
+  // Todos los artículos que comparten el mismo número de remisión
+  const lineasRem = venta.numeroRemision ? state.ventas.filter(v=>v.numeroRemision===venta.numeroRemision) : [venta];
+  if(!lineasRem.length) lineasRem.push(venta);
+  const totalRem = lineasRem.reduce((a,l)=>a+Number(l.total||0),0);
+  const obsRem = [...new Set(lineasRem.map(l=>l.observaciones).filter(Boolean))].join(' / ');
 
   // ---- Encabezado (logo + datos empresa a la izquierda, REMISION a la derecha) ----
   const headerTop = margin;
@@ -1949,13 +1963,13 @@ function generarRemisionPDF(venta){
     startY: tableY,
     margin: {left: margin, right: margin},
     head: [['CANT.','DETALLE','V. UNIT.','VALOR']],
-    body: [[
-      `${fmt(venta.cmVendidos)} ${esProductoUnidades(venta.producto) ? 'un.' : 'cm'}`,
-      `${nombreProducto(venta.producto, venta.material)}${venta.talla ? ' talla '+venta.talla : ''}${venta.medida ? ' '+venta.medida : ''}`,
-      fmtMoney(venta.precioPorCm),
-      fmtMoney(venta.total)
-    ]],
-    foot: [['', '', 'TOTAL', fmtMoney(venta.total)]],
+    body: lineasRem.map(l=>[
+      `${fmt(l.cmVendidos)} ${esProductoUnidades(l.producto) ? 'un.' : 'cm'}`,
+      `${nombreProducto(l.producto, l.material)}${l.talla ? ' talla '+l.talla+(l.tipoParrilla==='plus'?' Plus':'') : ''}${l.medida ? ' '+l.medida : ''}`,
+      fmtMoney(l.precioPorCm),
+      fmtMoney(l.total)
+    ]),
+    foot: [['', '', 'TOTAL', fmtMoney(totalRem)]],
     theme: 'grid',
     headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold', halign: 'center', fontSize: 7.5 },
     footStyles: { fillColor: [255,255,255], textColor: navy, fontStyle: 'bold', halign: 'right', lineWidth: 0.25, lineColor: navy, fontSize: 8 },
@@ -1968,8 +1982,8 @@ function generarRemisionPDF(venta){
   doc.setFontSize(7);
   doc.setTextColor(...navy);
   doc.text(`Aprobado por: ${venta.creadoPor || '-'}`, margin, afterTableY);
-  if(venta.observaciones){
-    doc.text(`Obs: ${venta.observaciones}`, margin, afterTableY+4, {maxWidth: boxW});
+  if(obsRem){
+    doc.text(`Obs: ${obsRem}`, margin, afterTableY+4, {maxWidth: boxW});
     afterTableY += 4;
   }
 
@@ -2008,7 +2022,10 @@ function generarRemisionRecibidoPDF(entrada){
   const boxW = pageW - margin*2;
   const navy = [20, 40, 75];
   const numero = entrada.numeroRecibido ? String(entrada.numeroRecibido) : String(entrada.id||'').slice(-6).toUpperCase();
-  const costoTotal = costoTotalEntrada(entrada);
+  const lineasRec = entrada.numeroRecibido ? state.entradas.filter(e=>e.numeroRecibido===entrada.numeroRecibido) : [entrada];
+  if(!lineasRec.length) lineasRec.push(entrada);
+  const costoTotal = lineasRec.reduce((a,l)=>a+Number(costoTotalEntrada(l)||0),0);
+  const obsRec = [...new Set(lineasRec.map(l=>l.observaciones).filter(Boolean))].join(' / ');
 
   // ---- Encabezado ----
   const headerTop = margin;
@@ -2061,23 +2078,25 @@ function generarRemisionRecibidoPDF(entrada){
     startY: tableY,
     margin: {left: margin, right: margin},
     head: [['CANT.','MATERIAL','C. UNIT.','C. TOTAL']],
-    body: [[
-      `${fmt(entrada.cantidad)} ${entrada.unidad||''}`,
-      entrada.material,
-      entrada.costoUnitario ? fmtMoney(entrada.costoUnitario) : '—',
-      costoTotal>0 ? fmtMoney(costoTotal) : '—'
-    ]],
+    body: lineasRec.map(l=>[
+      `${fmt(l.cantidad)} ${l.unidad||''}`,
+      l.material,
+      l.costoUnitario ? fmtMoney(l.costoUnitario) : '—',
+      costoTotalEntrada(l)>0 ? fmtMoney(costoTotalEntrada(l)) : '—'
+    ]),
+    foot: [['', '', 'TOTAL', costoTotal>0 ? fmtMoney(costoTotal) : '—']],
+    footStyles: { fillColor: [255,255,255], textColor: navy, fontStyle: 'bold', halign: 'right', lineWidth: 0.25, lineColor: navy, fontSize: 8 },
     theme: 'grid',
     headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold', halign: 'center', fontSize: 7.5 },
     styles: { lineColor: navy, lineWidth: 0.25, fontSize: 7.5, cellPadding: 2 },
   });
 
   let afterTableY = doc.lastAutoTable.finalY + 6;
-  if(entrada.observaciones){
+  if(obsRec){
     doc.setFont('helvetica','italic');
     doc.setFontSize(7);
     doc.setTextColor(...navy);
-    doc.text(`Observaciones: ${entrada.observaciones}`, margin, afterTableY, {maxWidth: boxW});
+    doc.text(`Observaciones: ${obsRec}`, margin, afterTableY, {maxWidth: boxW});
     afterTableY += 5;
   }
 
@@ -2118,6 +2137,11 @@ let ventaTalla = TALLAS_PARRILLA[0];
 let ventaTipoParrilla = 'estandar';
 let ventaMedida = null;
 let ventaMaterialSel = null;
+// Carrito: varios artículos en una misma remisión
+let carritoVenta = [];
+let ventaCab = {cliente:null, fecha:null, forma:'efectivo', obs:''};
+let carritoCompra = [];
+let compraCab = {fecha:null, forma:'efectivo', proveedor:'', obs:''};
 
 // ---------- Inventario de Producto Terminado (todos los productos que se venden) ----------
 function renderInventarioProductoTerminado(){
@@ -2251,7 +2275,7 @@ function renderVentas(){
     }
 
     return `<tr class="${(v.formaPago==='credito' && !v.pagado && dias>30) ? 'row-alert' : ''}">
-      <td>${v.fecha}<br><span style="font-size:10.5px;color:var(--ink-soft)">${v.cliente}${producto!=='casata'?` · ${nombreProducto(producto)}${v.talla?' '+v.talla+(v.tipoParrilla==='plus'?' (Plus)':' (Estándar)'):''}${v.medida?' '+v.medida:''}`:''}</span>${v.observaciones?`<br><span style="font-size:10px;color:var(--ink-soft);font-style:italic;">${v.observaciones}</span>`:''}</td>
+      <td>${v.fecha}<br><span style="font-size:10.5px;color:var(--ink-soft)">${v.numeroRemision?`<b>${v.numeroRemision}</b> · `:''}${v.cliente}${producto!=='casata'?` · ${nombreProducto(producto)}${v.talla?' '+v.talla+(v.tipoParrilla==='plus'?' (Plus)':' (Estándar)'):''}${v.medida?' '+v.medida:''}`:''}</span>${v.observaciones?`<br><span style="font-size:10px;color:var(--ink-soft);font-style:italic;">${v.observaciones}</span>`:''}</td>
       <td class="num">${fmt(v.cmVendidos)} ${esUnidades?'un.':'cm'}</td>
       <td class="num">${fmtMoney(v.total)}</td>
       <td>${estado}</td>
@@ -2260,7 +2284,16 @@ function renderVentas(){
   }).join('');
   if(!ventaRows) ventaRows = `<tr><td colspan="5" class="empty">Sin ventas registradas aún</td></tr>`;
 
-  const clienteOptions = state.clientes.map(c=>`<option value="${c.nombre}">${c.nombre}</option>`).join('');
+  const clienteOptions = state.clientes.map(c=>`<option value="${c.nombre}" ${c.nombre===ventaCab.cliente?'selected':''}>${c.nombre}</option>`).join('');
+  const totalCarritoVenta = carritoVenta.reduce((a,it)=>a+it.total,0);
+  const carritoVentaHtml = carritoVenta.length ? `
+      <div class="full" style="border:1px solid var(--line); border-radius:6px; padding:8px; background:var(--paper);">
+        <div style="font-weight:700; font-size:12px; margin-bottom:6px;">🧾 Artículos en esta remisión (${carritoVenta.length})</div>
+        <table><thead><tr><th>Cant.</th><th>Detalle</th><th>V. unit.</th><th>Valor</th><th></th></tr></thead><tbody>
+        ${carritoVenta.map((it,i)=>`<tr><td class="num">${fmt(it.cmVendidos)} ${it.unidadTxt}</td><td>${it.detalle}</td><td class="num">${fmtMoney(it.precioPorCm)}</td><td class="num">${fmtMoney(it.total)}</td><td><button class="del-btn" data-quitar-item-venta="${i}" title="Quitar">✕</button></td></tr>`).join('')}
+        <tr><td colspan="3" style="text-align:right; font-weight:700;">TOTAL</td><td class="num" style="font-weight:700;">${fmtMoney(totalCarritoVenta)}</td><td></td></tr>
+        </tbody></table>
+      </div>` : '';
   const esParrillaForm = ventaProducto==='parrillas';
   const esUnidadesForm = ventaProducto!=='casata'; // parrillas, colchones, marcos, resorte bonell: se venden por unidad
   const tallaOptionsVenta = TALLAS_PARRILLA.map(t=>`<option value="${t}" ${t===ventaTalla?'selected':''}>${t}</option>`).join('');
@@ -2291,7 +2324,7 @@ function renderVentas(){
   const formHtml = canEdit ? `
   <div class="card">
     <div class="card-title">Registrar Venta</div>
-    <div class="card-desc">Se descuenta del stock terminado del producto elegido. ¿No ves tu cliente? Créalo en la pestaña "Clientes".</div>
+    <div class="card-desc">Elige producto, cantidad y precio y toca "+ Agregar artículo". Repite con cada referencia (colchones, parrillas, etc.) y al final toca "Registrar remisión": todo queda en una sola remisión. ¿No ves tu cliente? Créalo en la pestaña "Clientes".</div>
     <div class="form-grid">
       <div class="full"><label>Producto</label>
         <select id="v-producto">
@@ -2317,18 +2350,20 @@ function renderVentas(){
       <div class="full"><label>Cliente</label>
         <select id="v-cliente">${clienteOptions || '<option value="">Agrega un cliente primero</option>'}</select>
       </div>
-      <div><label>Fecha</label><input id="v-fecha" type="date" value="${todayISO()}"></div>
+      <div><label>Fecha</label><input id="v-fecha" type="date" value="${ventaCab.fecha || todayISO()}"></div>
       <div><label>${esMaterialForm ? `Cantidad vendida (${ventaMaterialSel ? (state.materiales.find(m=>m.nombre===ventaMaterialSel)||{}).unidad||'kg' : 'kg/ml'})` : (esUnidadesForm?'Unidades vendidas':'Cm vendidos')}</label><input id="v-cm" type="number" step="any"></div>
       <div><label>${esMaterialForm ? 'Precio por unidad ($)' : (esUnidadesForm?'Precio por unidad ($)':'Precio por cm ($)')}</label><input id="v-precio" type="number" step="any" value="${precioAuto}"></div>
       <div>
         <label>Forma de pago</label>
         <select id="v-forma">
-          <option value="efectivo">Efectivo</option>
-          <option value="credito">Crédito</option>
+          <option value="efectivo" ${ventaCab.forma!=='credito'?'selected':''}>Efectivo</option>
+          <option value="credito" ${ventaCab.forma==='credito'?'selected':''}>Crédito</option>
         </select>
       </div>
-      <div class="full"><label>Observaciones (opcional)</label><input id="v-obs" placeholder="Ej: entregar en la tarde, cliente pidió factura"></div>
-      <button class="add-btn" id="v-add">+ Registrar venta</button>
+      <div class="full"><label>Observaciones (opcional)</label><input id="v-obs" value="${(ventaCab.obs||'').replace(/"/g,'&quot;')}" placeholder="Ej: entregar en la tarde, cliente pidió factura"></div>
+      <button class="export-btn" id="v-add-item" style="grid-column:1/-1;">+ Agregar este artículo a la remisión</button>
+      ${carritoVentaHtml}
+      <button class="add-btn" id="v-add">✔ Registrar remisión${carritoVenta.length?` (${carritoVenta.length} artículo${carritoVenta.length>1?'s':''})`:''}</button>
     </div>
   </div>` : '';
 
@@ -4567,41 +4602,77 @@ function attachHandlers(){
     if(campos) campos.style.display = (eMaterialSel.value==='__nuevo__') ? 'block' : 'none';
   };
 
-  const eAdd = document.getElementById('e-add');
-  if(eAdd) eAdd.onclick = async ()=>{
+  const eFec = document.getElementById('e-fecha');
+  if(eFec) eFec.onchange = ()=>{ compraCab.fecha = eFec.value; };
+  const eFor = document.getElementById('e-forma');
+  if(eFor) eFor.onchange = ()=>{ compraCab.forma = eFor.value; };
+  const ePro = document.getElementById('e-proveedor');
+  if(ePro) ePro.onchange = ()=>{ compraCab.proveedor = ePro.value; };
+  const eObs = document.getElementById('e-obs');
+  if(eObs) eObs.oninput = ()=>{ compraCab.obs = eObs.value; };
+
+  async function leerItemCompra(silencioso){
     const sel = document.getElementById('e-material');
     let material = sel.value;
     let unidad = sel.selectedOptions[0] ? sel.selectedOptions[0].getAttribute('data-unidad') : 'kg';
-    const fecha = document.getElementById('e-fecha').value || todayISO();
-    const cantidad = document.getElementById('e-cantidad').value;
+    const cantidad = Number(document.getElementById('e-cantidad').value);
     const costoUnitario = Number(document.getElementById('e-costo') ? document.getElementById('e-costo').value : 0) || 0;
-    const formaPago = document.getElementById('e-forma') ? document.getElementById('e-forma').value : 'efectivo';
-    const proveedor = document.getElementById('e-proveedor') ? document.getElementById('e-proveedor').value.trim() : '';
-    const observaciones = document.getElementById('e-obs') ? document.getElementById('e-obs').value.trim() : '';
-
+    if(!cantidad){ if(!silencioso) alert('Escribe la cantidad recibida.'); return null; }
     if(material==='__nuevo__'){
       const nuevoNombre = document.getElementById('e-nuevo-nombre').value.trim();
       const nuevoTipo = document.getElementById('e-nuevo-tipo').value.trim();
       const nuevaUnidad = document.getElementById('e-nuevo-unidad').value.trim();
       const nuevoMinimo = Number(document.getElementById('e-nuevo-minimo').value) || 0;
-      if(!nuevoNombre || !nuevoTipo || !nuevaUnidad){ alert('Completa nombre, tipo y unidad del material nuevo.'); return; }
+      if(!nuevoNombre || !nuevoTipo || !nuevaUnidad){ alert('Completa nombre, tipo y unidad del material nuevo.'); return null; }
       try{
         await db.collection('materiales').add({nombre:nuevoNombre, tipo:nuevoTipo, unidad:nuevaUnidad, stockInicial:0, stockMinimo:nuevoMinimo, costoInicial:0});
-      }catch(e){ alert('No se pudo crear el material: ' + e.message); return; }
+      }catch(e){ alert('No se pudo crear el material: ' + e.message); return null; }
       material = nuevoNombre;
       unidad = nuevaUnidad;
     }
+    if(!material){ alert('Elige el material.'); return null; }
+    return { material, unidad, cantidad, costoUnitario, costoTotal: cantidad*costoUnitario };
+  }
 
-    if(!material || !cantidad) return;
-    const costoTotal = Number(cantidad)*costoUnitario;
+  const eAddItem = document.getElementById('e-add-item');
+  if(eAddItem) eAddItem.onclick = async ()=>{
+    const item = await leerItemCompra(false);
+    if(!item) return;
+    carritoCompra.push(item);
+    render();
+  };
+
+  document.querySelectorAll('[data-quitar-item-compra]').forEach(btn=>{
+    btn.onclick = ()=>{ carritoCompra.splice(Number(btn.getAttribute('data-quitar-item-compra')),1); render(); };
+  });
+
+  const eAdd = document.getElementById('e-add');
+  if(eAdd) eAdd.onclick = async ()=>{
+    const pendiente = document.getElementById('e-cantidad') && document.getElementById('e-cantidad').value ? await leerItemCompra(true) : null;
+    const items = pendiente ? [...carritoCompra, pendiente] : [...carritoCompra];
+    const fecha = document.getElementById('e-fecha').value || todayISO();
+    const formaPago = document.getElementById('e-forma') ? document.getElementById('e-forma').value : 'efectivo';
+    const proveedor = document.getElementById('e-proveedor') ? document.getElementById('e-proveedor').value.trim() : '';
+    const observaciones = document.getElementById('e-obs') ? document.getElementById('e-obs').value.trim() : '';
+    if(!items.length){ alert('Agrega al menos un material a la remisión.'); return; }
+    eAdd.disabled = true;
     try{
       const numeroRecibido = await obtenerSiguienteNumeroRecibido();
-      await db.collection('entradas').add({material, unidad, fecha, cantidad:Number(cantidad), costoUnitario, costoTotal, formaPago, proveedor, observaciones, numeroRecibido, creadoPor: myNombre});
-      if(costoTotal>0 && formaPago==='efectivo'){
-        await db.collection('cuadreCaja').add({fecha, tipo:'Salida', concepto:`Compra: ${material}`, monto:costoTotal});
+      const batch = db.batch();
+      items.forEach(it=>{
+        batch.set(db.collection('entradas').doc(), {material: it.material, unidad: it.unidad, fecha, cantidad: it.cantidad, costoUnitario: it.costoUnitario, costoTotal: it.costoTotal, formaPago, proveedor, observaciones, numeroRecibido, creadoPor: myNombre});
+      });
+      await batch.commit();
+      const totalCompra = items.reduce((a,it)=>a+it.costoTotal,0);
+      if(totalCompra>0 && formaPago==='efectivo'){
+        await db.collection('cuadreCaja').add({fecha, tipo:'Salida', concepto:`Compra ${numeroRecibido}: ${items.map(it=>it.material).join(', ')}`, monto: totalCompra});
       }
+      carritoCompra = [];
+      compraCab.obs = '';
+      render();
+      alert(`Remisión ${numeroRecibido} registrada con ${items.length} material${items.length>1?'es':''}.`);
     }
-    catch(e){ alert('No se pudo registrar: ' + e.message); }
+    catch(e){ alert('No se pudo registrar: ' + e.message); eAdd.disabled = false; }
   };
 
   const cpAdd = document.getElementById('cp-add');
@@ -4867,34 +4938,79 @@ function attachHandlers(){
     vMedidaSel.onchange = ()=>{ ventaMedida = vMedidaSel.value; render(); };
   }
 
-  const vAdd = document.getElementById('v-add');
-  if(vAdd) vAdd.onclick = async ()=>{
+  // Guardar encabezado de la remisión (se conserva mientras agregas artículos)
+  const vCli = document.getElementById('v-cliente');
+  if(vCli){ if(!ventaCab.cliente) ventaCab.cliente = vCli.value; vCli.onchange = ()=>{ ventaCab.cliente = vCli.value; }; }
+  const vFec = document.getElementById('v-fecha');
+  if(vFec) vFec.onchange = ()=>{ ventaCab.fecha = vFec.value; };
+  const vFor = document.getElementById('v-forma');
+  if(vFor) vFor.onchange = ()=>{ ventaCab.forma = vFor.value; };
+  const vObs = document.getElementById('v-obs');
+  if(vObs) vObs.oninput = ()=>{ ventaCab.obs = vObs.value; };
+
+  function leerItemVenta(silencioso){
     const producto = document.getElementById('v-producto') ? document.getElementById('v-producto').value : 'casata';
     const talla = document.getElementById('v-talla') ? document.getElementById('v-talla').value : null;
     const tipoParrilla = document.getElementById('v-tipo-parrilla') ? document.getElementById('v-tipo-parrilla').value : null;
     const medida = document.getElementById('v-medida') ? document.getElementById('v-medida').value : null;
     const materialVendido = document.getElementById('v-material') ? document.getElementById('v-material').value : null;
+    const cmVendidos = Number(document.getElementById('v-cm').value);
+    const precioPorCm = Number(document.getElementById('v-precio').value) || 0;
+    if(!cmVendidos){ if(!silencioso) alert('Escribe la cantidad del artículo.'); return null; }
+    if(producto==='material_suelto' && !materialVendido){ alert('Elige qué material vas a vender.'); return null; }
+    const item = { producto, cmVendidos, precioPorCm, total: cmVendidos*precioPorCm };
+    if(producto==='parrillas' && talla){ item.talla = talla; item.tipoParrilla = tipoParrilla || 'estandar'; }
+    if(medida) item.medida = medida;
+    if(producto==='material_suelto' && materialVendido) item.material = materialVendido;
+    item.detalle = `${nombreProducto(producto, item.material)}${item.talla ? ' talla '+item.talla+(item.tipoParrilla==='plus'?' Plus':' Estándar') : ''}${item.medida ? ' '+item.medida : ''}`;
+    item.unidadTxt = producto==='material_suelto' ? ((state.materiales.find(m=>m.nombre===materialVendido)||{}).unidad||'') : (esProductoUnidades(producto) ? 'un.' : 'cm');
+    return item;
+  }
+
+  const vAddItem = document.getElementById('v-add-item');
+  if(vAddItem) vAddItem.onclick = ()=>{
+    const item = leerItemVenta(false);
+    if(!item) return;
+    carritoVenta.push(item);
+    render();
+  };
+
+  document.querySelectorAll('[data-quitar-item-venta]').forEach(btn=>{
+    btn.onclick = ()=>{ carritoVenta.splice(Number(btn.getAttribute('data-quitar-item-venta')),1); render(); };
+  });
+
+  const vAdd = document.getElementById('v-add');
+  if(vAdd) vAdd.onclick = async ()=>{
+    // Si dejaste un artículo escrito sin agregarlo, se incluye automáticamente
+    const pendiente = document.getElementById('v-cm') && document.getElementById('v-cm').value ? leerItemVenta(true) : null;
+    const items = pendiente ? [...carritoVenta, pendiente] : [...carritoVenta];
     const cliente = document.getElementById('v-cliente').value;
     const fecha = document.getElementById('v-fecha').value || todayISO();
-    const cmVendidos = document.getElementById('v-cm').value;
-    const precioPorCm = document.getElementById('v-precio').value || 0;
     const formaPago = document.getElementById('v-forma').value;
     const observaciones = document.getElementById('v-obs') ? document.getElementById('v-obs').value.trim() : '';
-    if(!cliente || !cmVendidos) return;
-    if(producto==='material_suelto' && !materialVendido){ alert('Elige qué material vas a vender.'); return; }
-    const total = Number(cmVendidos) * Number(precioPorCm);
+    if(!cliente){ alert('Elige el cliente.'); return; }
+    if(!items.length){ alert('Agrega al menos un artículo a la remisión.'); return; }
+    vAdd.disabled = true;
     try{
       const numeroRemision = await obtenerSiguienteNumeroRemision();
-      const ventaData = {
-        cliente, fecha, producto, cmVendidos:Number(cmVendidos), precioPorCm:Number(precioPorCm),
-        total, formaPago, pagado: formaPago==='efectivo', observaciones,
-        numeroRemision, creadoPor: myNombre
-      };
-      if(producto==='parrillas' && talla){ ventaData.talla = talla; ventaData.tipoParrilla = tipoParrilla || 'estandar'; }
-      if(medida) ventaData.medida = medida;
-      if(producto==='material_suelto' && materialVendido) ventaData.material = materialVendido;
-      await db.collection('ventas').add(ventaData);
-    }catch(e){ alert('No se pudo registrar la venta: ' + e.message); }
+      const batch = db.batch();
+      items.forEach(it=>{
+        const data = {
+          cliente, fecha, producto: it.producto, cmVendidos: it.cmVendidos, precioPorCm: it.precioPorCm,
+          total: it.total, formaPago, pagado: formaPago==='efectivo', observaciones,
+          numeroRemision, creadoPor: myNombre
+        };
+        if(it.talla){ data.talla = it.talla; data.tipoParrilla = it.tipoParrilla; }
+        if(it.medida) data.medida = it.medida;
+        if(it.material) data.material = it.material;
+        batch.set(db.collection('ventas').doc(), data);
+      });
+      await batch.commit();
+      carritoVenta = [];
+      ventaCab.obs = '';
+      render();
+      alert(`Remisión ${numeroRemision} registrada con ${items.length} artículo${items.length>1?'s':''}.`);
+    }catch(e){ alert('No se pudo registrar la venta: ' + e.message); vAdd.disabled = false; }
   };
 
   document.querySelectorAll('[data-editar-venta]').forEach(btn=>{
