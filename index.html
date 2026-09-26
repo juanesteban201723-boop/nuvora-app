@@ -55,6 +55,21 @@
   nav button.active{ background:var(--blue); color:var(--paper); border-color:var(--blue); }
 
   .panel{ display:none; } .panel.active{ display:block; }
+  .seg{ display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap; }
+  .seg button{ font-family:'IBM Plex Mono',monospace; font-size:12px; padding:9px 14px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--ink-soft); cursor:pointer; flex:1; min-width:max-content; }
+  .seg button.on{ background:var(--blue-bg); color:var(--blue); border-color:var(--blue); font-weight:700; }
+  .crumb{ margin-bottom:12px; }
+  .goto{ cursor:pointer; }
+  .goto:active{ transform:scale(.98); }
+  .hero-card.perdida{ background:var(--red); }
+  .hero-sub{ display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; font-family:'IBM Plex Mono',monospace; font-size:11.5px; opacity:.9; }
+  .balance-card .hint{ font-size:11px; color:var(--ink-soft); margin-top:2px; }
+  .mas-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .mas-grid button{ font-size:13px; padding:14px 10px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); cursor:pointer; text-align:left; }
+  tr.total td{ font-weight:700; background:var(--paper); }
+  .pos{ color:var(--green); } .neg{ color:var(--red); }
+  .inf-filtro{ display:flex; gap:8px; align-items:center; padding:0 16px 12px; flex-wrap:wrap; }
+  .inf-filtro select, .inf-filtro input{ font-size:13px; padding:7px 9px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink); }
   .card{ background:var(--card); border:1px solid var(--line); border-radius:6px; margin-bottom:16px; overflow:hidden; }
   .card-title{ font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--blue); font-weight:600; padding:14px 16px 6px; }
   .card-desc{ font-size:12px; color:var(--ink-soft); padding:0 16px 10px; line-height:1.4; }
@@ -424,7 +439,7 @@ const NOMBRES_TIPOS_COLCHON = {
   colchon_comprimidos: 'Comprimidos'
 };
 
-const ALL_TABS = [
+const LEGACY_TABS = [
   {id:'dashboard', label:'Dashboard'},
   {id:'materiales', label:'Materiales'},
   {id:'formulas', label:'Fórmulas'},
@@ -445,11 +460,43 @@ const ALL_TABS = [
   {id:'reportes', label:'Reportes'},
 ];
 
+// Menú simplificado: 7 pestañas principales + "Más" (pantallas antiguas, sin borrar datos)
+const ALL_TABS = [
+  {id:'inicio', label:'Inicio'},
+  {id:'ventas', label:'Vender'},
+  {id:'inventario', label:'Comprar'},
+  {id:'producir', label:'Producir'},
+  {id:'inventarioGeneral', label:'Inventario'},
+  {id:'clientes', label:'Clientes'},
+  {id:'informes', label:'Informes'},
+];
+// Qué pantallas antiguas cubre cada pestaña nueva (para permisos ya guardados)
+const TAB_EQUIV = {
+  inicio:['dashboard','finanzas'], ventas:['ventas'], inventario:['inventario'],
+  producir:['produccion','produccionParrillas','produccionEnsamblador','formulas'],
+  inventarioGeneral:['materiales','inventarioProducto'],
+  clientes:['contactos','cartera','consolidacion'], informes:['reportes','historico','finanzas']
+};
+const LEGACY_IDS = LEGACY_TABS.map(t=>t.id).concat(['usuarios']);
+function esPestanaLegacy(id){ return LEGACY_IDS.includes(id) && !ALL_TABS.some(t=>t.id===id); }
+function tienePermiso(id){
+  if(myRole==='admin') return true;
+  if(myRole==='administrativo') return myPermisos.includes(id) || (TAB_EQUIV[id]||[]).some(x=>myPermisos.includes(x));
+  return false;
+}
+function legacyPermitidas(){
+  const extra = myRole==='admin' ? [{id:'usuarios', label:'Usuarios'}] : [];
+  return LEGACY_TABS.filter(t=> myRole==='admin' || myPermisos.includes(t.id)).concat(extra);
+}
 function getTabsForCurrentUser(){
-  if(myRole==='admin') return [...ALL_TABS, {id:'usuarios', label:'Usuarios'}];
-  if(myRole==='produccion') return [{id:'produccion', label:'Producción Casata'}, {id:'produccionParrillas', label:'Producción Parrillas'}, {id:'produccionEnsamblador', label:'Producción Ensamblador'}];
-  if(myRole==='inventario') return [{id:'inventario', label:'Cargar Inventario'}];
-  if(myRole==='administrativo') return ALL_TABS.filter(t=>myPermisos.includes(t.id));
+  if(myRole==='admin') return [...ALL_TABS, {id:'mas', label:'Más ⋯'}];
+  if(myRole==='produccion') return [{id:'producir', label:'Producir'}];
+  if(myRole==='inventario') return [{id:'inventario', label:'Comprar'}];
+  if(myRole==='administrativo'){
+    const t = ALL_TABS.filter(t=>tienePermiso(t.id));
+    if(legacyPermitidas().length) t.push({id:'mas', label:'Más ⋯'});
+    return t;
+  }
   return [];
 }
 
@@ -691,7 +738,7 @@ function produccionCasata(){
 
 function stockCasataTerminada(){
   const totalProducido = state.produccion.reduce((s,p)=>s+Number(p.cmTotal||0),0);
-  const totalVendido = state.ventas.filter(v=>v.producto!=='parrillas').reduce((s,v)=>s+Number(v.cmVendidos||0),0);
+  const totalVendido = state.ventas.filter(v=>(!v.producto || v.producto==='casata')).reduce((s,v)=>s+Number(v.cmVendidos||0),0);
   const ajuste = Number(state.settings.ajusteStockCasata||0);
   return totalProducido - totalVendido + ajuste;
 }
@@ -728,7 +775,7 @@ function produccionColchonPosible(tipoColchon, medida){
 
 function stockColchonesTerminados(tipoColchon, medida){
   const totalProducido = state.produccionColchones.filter(p=>p.tipoColchon===tipoColchon && p.medida===medida).reduce((s,p)=>s+Number(p.unidades||0),0);
-  const totalVendido = state.ventas.filter(v=>v.producto===tipoColchon && v.medida===medida).reduce((s,v)=>s+1,0); // colchones se venden por unidad
+  const totalVendido = state.ventas.filter(v=>v.producto===tipoColchon && v.medida===medida).reduce((s,v)=>s+(Number(v.cmVendidos)||1),0); // cantidad real de colchones de cada renglón
   const ajustes = state.settings.ajustesStockColchones || {};
   const ajuste = Number(ajustes[tipoColchon+'|'+medida] || 0);
   return totalProducido - totalVendido + ajuste;
@@ -901,7 +948,7 @@ function calcularPL(mes){
   const gast = gastosDelMes(mes);
   const ingresos = vent.reduce((s,v)=>s+Number(v.total||0),0);
   const cmVendido = vent.reduce((s,v)=>s+Number(v.cmVendidos||0),0);
-  const costoVentas = cmVendido * costoPorCm();
+  const costoVentas = vent.reduce((s,v)=>s+costoDeVenta(v),0);
   const totalGastos = gast.reduce((s,g)=>s+Number(g.monto||0),0);
   const utilidad = ingresos - costoVentas - totalGastos;
   const efectivoMes = vent.filter(v=>v.formaPago==='efectivo').reduce((s,v)=>s+Number(v.total||0),0);
@@ -996,6 +1043,365 @@ function costoPorBloque(cmPorBloque){
   return costoPorCm() * Number(cmPorBloque || state.settings.cmPorBloque || 100);
 }
 
+// =====================================================================
+// ---------------- MENÚ SIMPLIFICADO (v22) ----------------
+// =====================================================================
+let producirVista = 'casata';     // casata | parrillas | colchones | formulas
+let invVista = 'materia';         // materia | producto
+let clientesVista = 'resumen';    // resumen | cobrar | directorio
+let informesAnio = null;
+let informesPeriodoCliente = 'anio'; // mes | anio | todo
+let informesChartInstance = null;
+let clientesFiltro = '';
+const MESES_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+const MESES_LARGOS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+
+// Costo de lo vendido en un renglón de venta, según el producto
+function costoUnitarioVenta(v){
+  const p = v.producto || 'casata';
+  if(p==='casata') return costoPorCm();
+  if(p==='parrillas') return costoPorUnidadParrilla(v.talla);
+  if(TIPOS_COLCHON.includes(p)) return costoPorUnidadColchon(p, v.medida);
+  if(p==='colchon_resorte' || p==='colchon_ortopedico'){
+    // Ventas antiguas: promedio del costo de los tipos de esa familia en esa medida
+    const talla = Object.keys(TALLA_A_MEDIDA_PARRILLA).find(t=>TALLA_A_MEDIDA_PARRILLA[t]===v.medida) || v.medida;
+    const costos = TIPOS_COLCHON.filter(t=>t.startsWith(p)).map(t=>costoPorUnidadColchon(t, talla)).filter(c=>c>0);
+    return costos.length ? costos.reduce((a,b)=>a+b,0)/costos.length : 0;
+  }
+  if(p==='material_suelto') return costoPromedio(v.material);
+  return 0;
+}
+function cantidadVenta(v){
+  if(TIPOS_COLCHON.includes(v.producto) || (v.producto||'').startsWith('colchon')) return Number(v.cmVendidos)||1;
+  return Number(v.cmVendidos)||0;
+}
+function costoDeVenta(v){ return cantidadVenta(v) * costoUnitarioVenta(v); }
+function ventasSinCosto(lista){ return lista.filter(v=> Number(v.total||0)>0 && costoUnitarioVenta(v)===0); }
+
+function resultadoMes(mes){
+  const vent = ventasDelMes(mes);
+  const ventas = vent.reduce((s,v)=>s+Number(v.total||0),0);
+  const costo = vent.reduce((s,v)=>s+costoDeVenta(v),0);
+  const gastos = gastosDelMes(mes).reduce((s,g)=>s+Number(g.monto||0),0);
+  return { ventas, costo, gastos, ganancia: ventas - costo - gastos, n: new Set(vent.map(v=>v.numeroRemision||v.id)).size, sinCosto: ventasSinCosto(vent).length };
+}
+
+// Producto terminado: lista con cantidad, costo unitario y valor
+function productoTerminadoLista(){
+  const filas = [];
+  const cas = stockCasataTerminada();
+  filas.push({ nombre:'Casata', cant: cas, unidad:'cm', costo: costoPorCm() });
+  TALLAS_PARRILLA.filter(t=>state.formulaParrillas.some(f=>f.talla===t)).forEach(t=>{
+    filas.push({ nombre:`Parrilla ${t}`, cant: stockParrillasTerminadas(t), unidad:'un.', costo: costoPorUnidadParrilla(t) });
+  });
+  TIPOS_COLCHON.forEach(tipo=> TALLAS_PARRILLA.forEach(m=>{
+    if(!state.formulaColchones.some(f=>f.tipoColchon===tipo && f.medida===m)) return;
+    filas.push({ nombre:`${NOMBRES_TIPOS_COLCHON[tipo]} ${m}`, cant: stockColchonesTerminados(tipo,m), unidad:'un.', costo: costoPorUnidadColchon(tipo,m) });
+  }));
+  return filas.map(f=>({...f, valor: Math.max(0,f.cant) * f.costo}));
+}
+
+// Resumen por cliente (compras, deuda, última compra)
+function resumenClientes(desde, hasta){
+  const grupos = {};
+  state.ventas.forEach(v=>{
+    const clave = normalizarNombre(v.cliente || '(sin nombre)');
+    if(!grupos[clave]) grupos[clave] = { nombres:{}, comprado:0, periodo:0, remisiones:new Set(), remPeriodo:new Set(), debe:0, ultima:'' };
+    const g = grupos[clave];
+    g.nombres[v.cliente] = (g.nombres[v.cliente]||0)+1;
+    g.comprado += Number(v.total||0);
+    g.remisiones.add(v.numeroRemision||v.id);
+    if((!desde || v.fecha>=desde) && (!hasta || v.fecha<=hasta)){ g.periodo += Number(v.total||0); g.remPeriodo.add(v.numeroRemision||v.id); }
+    g.debe += saldoPendiente(v);
+    if((v.fecha||'') > g.ultima) g.ultima = v.fecha;
+  });
+  return Object.values(grupos).map(g=>({
+    nombre: Object.keys(g.nombres).sort((a,b)=>g.nombres[b]-g.nombres[a])[0],
+    comprado: g.comprado, periodo: g.periodo, remisiones: g.remisiones.size, remPeriodo: g.remPeriodo.size, debe: g.debe, ultima: g.ultima
+  }));
+}
+
+function mesActual(){ return todayISO().slice(0,7); }
+function nombreMes(mes){ const [a,m] = mes.split('-'); return `${MESES_LARGOS[Number(m)-1]} ${a}`; }
+function seg(nombreVar, opciones, actual){
+  return `<div class="seg">${opciones.map(o=>`<button class="${o.id===actual?'on':''}" data-seg="${nombreVar}" data-val="${o.id}">${o.label}</button>`).join('')}</div>`;
+}
+
+// ---------------- INICIO ----------------
+function renderInicio(){
+  const mes = mesActual();
+  const r = resultadoMes(mes);
+  const gano = r.ganancia >= 0;
+  const valorMP = valorInventarioTotal();
+  const pt = productoTerminadoLista();
+  const valorPT = pt.reduce((s,f)=>s+f.valor,0);
+  const unidadesPT = pt.filter(f=>f.unidad==='un.').reduce((s,f)=>s+Math.max(0,f.cant),0);
+  const clientes = resumenClientes();
+  const meDeben = clientes.reduce((s,c)=>s+c.debe,0);
+  const leDebo = totalDebemosProveedores();
+  const deudores = clientes.filter(c=>c.debe>0).sort((a,b)=>b.debe-a.debe).slice(0,5);
+  const alertas = state.materiales.filter(m=>stockMaterial(m.nombre) < Number(m.stockMinimo||0));
+
+  const deudoresHtml = deudores.length ? deudores.map(c=>`<tr class="goto" data-goto="clientes">
+      <td>${c.nombre}</td><td class="num neg">${fmtMoney(c.debe)}</td></tr>`).join('')
+    : `<tr><td class="empty">Nadie te debe. 👌</td></tr>`;
+
+  return `
+  <div class="hero-card ${gano?'':'perdida'} goto" data-goto="informes">
+    <div class="label">Resultado de ${nombreMes(mes)}</div>
+    <div class="amount">${gano?'':'−'}${fmtMoney(Math.abs(r.ganancia))}</div>
+    <div class="limit">${gano ? 'Vas ganando este mes' : 'Vas perdiendo este mes'}</div>
+    <div class="hero-sub"><span>Ventas ${fmtMoney(r.ventas)}</span><span>Costo ${fmtMoney(r.costo)}</span><span>Gastos ${fmtMoney(r.gastos)}</span></div>
+  </div>
+  ${r.sinCosto ? `<div class="alert-banner">⚠ ${r.sinCosto} renglón(es) de venta de este mes no tienen costo en la fórmula, así que la ganancia sale más alta de lo real.</div>` : ''}
+
+  <div class="balance-grid">
+    <div class="balance-card goto" data-goto="inventarioGeneral" data-inv="materia">
+      <div class="label">Materia prima</div><div class="val">${fmtMoney(valorMP)}</div>
+      <div class="hint">${state.materiales.length} materiales</div></div>
+    <div class="balance-card goto" data-goto="inventarioGeneral" data-inv="producto">
+      <div class="label">Producto terminado</div><div class="val">${fmtMoney(valorPT)}</div>
+      <div class="hint">${fmt(unidadesPT)} unidades + ${fmt(Math.max(0,stockCasataTerminada()))} cm casata</div></div>
+    <div class="balance-card goto" data-goto="clientes">
+      <div class="label">Te deben clientes</div><div class="val neg">${fmtMoney(meDeben)}</div>
+      <div class="hint">${clientes.filter(c=>c.debe>0).length} clientes</div></div>
+    <div class="balance-card">
+      <div class="label">Debes a proveedores</div><div class="val">${fmtMoney(leDebo)}</div>
+      <div class="hint">compras a crédito</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Quién te debe más</div>
+    <table><tbody>${deudoresHtml}</tbody></table>
+  </div>
+
+  ${alertas.length ? `<div class="alert-banner goto" data-goto="inventarioGeneral" data-inv="materia">⚠ Material bajo el mínimo:
+      <div class="alert-list">${alertas.map(m=>`${m.nombre} (${fmt(stockMaterial(m.nombre))} ${m.unidad||'kg'})`).join(' · ')}</div></div>` : ''}
+
+  ${renderBuscarRemision()}`;
+}
+
+// ---------------- PRODUCIR ----------------
+function renderProducir(){
+  const ops = [{id:'casata',label:'Casata'},{id:'parrillas',label:'Parrillas'},{id:'colchones',label:'Colchones'}];
+  if(myRole==='admin') ops.push({id:'formulas',label:'Fórmulas'});
+  if(!ops.some(o=>o.id===producirVista)) producirVista = 'casata';
+  let cuerpo = '';
+  if(producirVista==='casata') cuerpo = renderProduccion();
+  if(producirVista==='parrillas') cuerpo = renderProduccionParrillas();
+  if(producirVista==='colchones') cuerpo = renderProduccionEnsamblador();
+  if(producirVista==='formulas') cuerpo = renderFormulas();
+  return seg('producirVista', ops, producirVista) + cuerpo;
+}
+
+// ---------------- INVENTARIO ----------------
+function renderInventarioGeneral(){
+  const ops = [{id:'materia',label:'Materia prima'},{id:'producto',label:'Producto terminado'}];
+  let cuerpo = '';
+  if(invVista==='materia'){
+    cuerpo = `<div class="value-card"><div class="name">Valor total de materia prima</div><div class="amount">${fmtMoney(valorInventarioTotal())}</div></div>` + renderMateriales();
+  } else {
+    const pt = productoTerminadoLista();
+    const total = pt.reduce((s,f)=>s+f.valor,0);
+    const filas = pt.map(f=>`<tr><td>${f.nombre}</td>
+      <td class="num" style="font-weight:700;${f.cant<0?'color:var(--red)':''}">${fmt(f.cant)} ${f.unidad}</td>
+      <td class="num">${fmtMoney(f.valor)}</td></tr>`).join('');
+    cuerpo = `<div class="value-card"><div class="name">Valor del producto terminado (a costo)</div><div class="amount">${fmtMoney(total)}</div></div>
+    <div class="card"><div class="card-title">Lo que tienes listo para vender</div>
+      <div class="card-desc">Producido menos vendido. En rojo: se vendió más de lo registrado como producido.</div>
+      <table><thead><tr><th>Producto</th><th class="num">Cantidad</th><th class="num">Valor</th></tr></thead>
+      <tbody>${filas}<tr class="total"><td>Total</td><td></td><td class="num">${fmtMoney(total)}</td></tr></tbody></table></div>
+    <div class="panel-toolbar"><button class="export-btn" id="pt-excel">⬇ Excel</button></div>`;
+    if(myRole==='admin'){
+      // Reutiliza el formulario de corrección de stock de la pantalla anterior
+      const viejo = renderInventarioProductoTerminado();
+      const i = viejo.indexOf('<div class="card">\n    <div class="card-title">Corregir Stock');
+      if(i>=0) cuerpo += viejo.slice(i);
+    }
+  }
+  return seg('invVista', ops, invVista) + cuerpo;
+}
+
+// ---------------- CLIENTES ----------------
+function renderClientesNuevo(){
+  const ops = [{id:'resumen',label:'Resumen'},{id:'cobrar',label:'Cobrar / abonos'},{id:'directorio',label:'Directorio'}];
+  let cuerpo = '';
+  if(clientesVista==='cobrar') cuerpo = renderCartera();
+  else if(clientesVista==='directorio') cuerpo = renderContactos();
+  else {
+    const anio = todayISO().slice(0,4);
+    const lista = resumenClientes(anio+'-01-01', anio+'-12-31').sort((a,b)=> (b.debe-a.debe) || (b.comprado-a.comprado));
+    const totDebe = lista.reduce((s,c)=>s+c.debe,0);
+    const totAnio = lista.reduce((s,c)=>s+c.periodo,0);
+    const filas = lista.map(c=>`<tr data-cli-row="${normalizarNombre(c.nombre)}">
+      <td>${c.nombre}<br><span style="font-size:10.5px;color:var(--ink-soft)">${c.remisiones} remisiones · última ${c.ultima||'—'}</span></td>
+      <td class="num">${fmtMoney(c.periodo)}</td>
+      <td class="num">${fmtMoney(c.comprado)}</td>
+      <td class="num ${c.debe>0?'neg':''}" style="font-weight:700">${c.debe>0?fmtMoney(c.debe):'—'}</td></tr>`).join('');
+    cuerpo = `<div class="balance-grid">
+        <div class="balance-card"><div class="label">Te deben en total</div><div class="val neg">${fmtMoney(totDebe)}</div></div>
+        <div class="balance-card"><div class="label">Vendido en ${anio}</div><div class="val">${fmtMoney(totAnio)}</div></div>
+      </div>
+      <div class="card"><div class="card-title">Cuánto compra y cuánto debe cada cliente</div>
+        <div class="inf-filtro"><input id="cli-buscar" placeholder="Buscar cliente…" value="${clientesFiltro}" style="flex:1"></div>
+        <div style="overflow-x:auto"><table><thead><tr><th>Cliente</th><th class="num">${anio}</th><th class="num">Total histórico</th><th class="num">Debe</th></tr></thead>
+        <tbody>${filas || '<tr><td colspan="4" class="empty">Aún no hay ventas</td></tr>'}</tbody></table></div>
+      </div>
+      <div class="panel-toolbar" style="gap:6px"><button class="export-btn" id="cli-excel">⬇ Excel</button><button class="export-btn" id="cli-pdf">⬇ PDF</button></div>
+      <div class="card-desc" style="padding:0">Para registrar un abono entra a <b>Cobrar / abonos</b>.</div>`;
+  }
+  return seg('clientesVista', ops, clientesVista) + cuerpo;
+}
+function filasExportClientes(){
+  const anio = todayISO().slice(0,4);
+  return resumenClientes(anio+'-01-01', anio+'-12-31').sort((a,b)=>b.debe-a.debe||b.comprado-a.comprado)
+    .map(c=>({Cliente:c.nombre, [`Comprado ${anio}`]:Math.round(c.periodo), 'Total histórico':Math.round(c.comprado), Debe:Math.round(c.debe), 'Última compra':c.ultima}));
+}
+
+// ---------------- INFORMES ----------------
+function aniosConDatos(){
+  const s = new Set([todayISO().slice(0,4)]);
+  state.ventas.forEach(v=> v.fecha && s.add(v.fecha.slice(0,4)));
+  state.gastos.forEach(g=> g.fecha && s.add(g.fecha.slice(0,4)));
+  return [...s].sort().reverse();
+}
+function tablaMensual(anio){
+  return MESES_CORTOS.map((m,i)=>{ const mes = `${anio}-${String(i+1).padStart(2,'0')}`; return {mes, etiqueta:m, ...resultadoMes(mes)}; });
+}
+function rangoPeriodoCliente(){
+  const hoy = todayISO();
+  if(informesPeriodoCliente==='mes') return [hoy.slice(0,7)+'-01', hoy.slice(0,7)+'-31'];
+  if(informesPeriodoCliente==='anio') return [informesAnio+'-01-01', informesAnio+'-12-31'];
+  return [null,null];
+}
+function ventasPorProducto(anio){
+  const g = {};
+  state.ventas.filter(v=>(v.fecha||'').startsWith(anio)).forEach(v=>{
+    let n = nombreProducto(v.producto, v.material);
+    if(v.talla) n += ' ' + v.talla; if(v.medida) n += ' ' + v.medida;
+    if(!g[n]) g[n] = {cant:0,total:0,costo:0,unidad: (v.producto||'casata')==='casata'?'cm':'un.'};
+    g[n].cant += cantidadVenta(v); g[n].total += Number(v.total||0); g[n].costo += costoDeVenta(v);
+  });
+  return Object.entries(g).map(([nombre,d])=>({nombre,...d})).sort((a,b)=>b.total-a.total);
+}
+function renderInformes(){
+  if(!informesAnio) informesAnio = todayISO().slice(0,4);
+  const filas = tablaMensual(informesAnio);
+  const tot = filas.reduce((s,f)=>({ventas:s.ventas+f.ventas,costo:s.costo+f.costo,gastos:s.gastos+f.gastos,ganancia:s.ganancia+f.ganancia}),{ventas:0,costo:0,gastos:0,ganancia:0});
+  const hayMes = f=> f.ventas||f.gastos;
+  const filasHtml = filas.map(f=>`<tr style="${hayMes(f)?'':'opacity:.45'}"><td>${f.etiqueta}</td>
+    <td class="num">${fmtMoney(f.ventas)}</td><td class="num">${fmtMoney(f.costo)}</td><td class="num">${fmtMoney(f.gastos)}</td>
+    <td class="num ${f.ganancia<0?'neg':'pos'}" style="font-weight:700">${fmtMoney(f.ganancia)}</td></tr>`).join('');
+  const sinCosto = filas.reduce((s,f)=>s+f.sinCosto,0);
+
+  const [d,h] = rangoPeriodoCliente();
+  const porCli = resumenClientes(d,h).filter(c=>c.periodo>0).sort((a,b)=>b.periodo-a.periodo);
+  const totCli = porCli.reduce((s,c)=>s+c.periodo,0);
+  const cliHtml = porCli.map(c=>`<tr><td>${c.nombre}</td><td class="num">${c.remPeriodo}</td><td class="num">${fmtMoney(c.periodo)}</td>
+    <td class="num">${totCli?Math.round(c.periodo*100/totCli):0}%</td></tr>`).join('');
+
+  const prods = ventasPorProducto(informesAnio);
+  const prodHtml = prods.map(p=>`<tr><td>${p.nombre}</td><td class="num">${fmt(p.cant)} ${p.unidad}</td><td class="num">${fmtMoney(p.total)}</td>
+    <td class="num ${p.total-p.costo<0?'neg':''}">${fmtMoney(p.total-p.costo)}</td></tr>`).join('');
+
+  return `
+  <div class="card"><div class="card-title">Ventas y ganancia por mes</div>
+    <div class="card-desc">Ganancia = ventas − costo de materiales de lo vendido (según tus fórmulas) − gastos del mes.</div>
+    <div class="inf-filtro"><label style="font-size:12px;color:var(--ink-soft)">Año</label>
+      <select id="inf-anio">${aniosConDatos().map(a=>`<option ${a===informesAnio?'selected':''}>${a}</option>`).join('')}</select>
+      <button class="export-btn" data-goto="gastos" style="margin-left:auto">＋ Registrar gasto</button></div>
+    <div class="chart-wrap" style="margin:0 16px 12px"><canvas id="informesChart"></canvas></div>
+    <div style="overflow-x:auto"><table><thead><tr><th>Mes</th><th class="num">Ventas</th><th class="num">Costo</th><th class="num">Gastos</th><th class="num">Ganancia</th></tr></thead>
+    <tbody>${filasHtml}<tr class="total"><td>Total</td><td class="num">${fmtMoney(tot.ventas)}</td><td class="num">${fmtMoney(tot.costo)}</td><td class="num">${fmtMoney(tot.gastos)}</td>
+      <td class="num ${tot.ganancia<0?'neg':'pos'}">${fmtMoney(tot.ganancia)}</td></tr></tbody></table></div>
+  </div>
+  ${sinCosto?`<div class="alert-banner">⚠ ${sinCosto} renglón(es) de venta de ${informesAnio} son de productos sin fórmula de costo (por ejemplo marcos o resortes sueltos). Su costo se está tomando como $0.</div>`:''}
+  <div class="panel-toolbar" style="gap:6px"><button class="export-btn" id="inf-mes-excel">⬇ Excel</button><button class="export-btn" id="inf-mes-pdf">⬇ PDF</button></div>
+
+  <div class="card"><div class="card-title">Ventas por cliente</div>
+    <div class="inf-filtro"><select id="inf-per-cli">
+      <option value="mes" ${informesPeriodoCliente==='mes'?'selected':''}>Este mes</option>
+      <option value="anio" ${informesPeriodoCliente==='anio'?'selected':''}>Año ${informesAnio}</option>
+      <option value="todo" ${informesPeriodoCliente==='todo'?'selected':''}>Todo el historial</option></select></div>
+    <table><thead><tr><th>Cliente</th><th class="num">Remis.</th><th class="num">Vendido</th><th class="num">%</th></tr></thead>
+    <tbody>${cliHtml || '<tr><td colspan="4" class="empty">Sin ventas en este periodo</td></tr>'}
+    ${porCli.length?`<tr class="total"><td>Total</td><td></td><td class="num">${fmtMoney(totCli)}</td><td></td></tr>`:''}</tbody></table>
+  </div>
+  <div class="panel-toolbar" style="gap:6px"><button class="export-btn" id="inf-cli-excel">⬇ Excel</button><button class="export-btn" id="inf-cli-pdf">⬇ PDF</button></div>
+
+  <div class="card"><div class="card-title">Qué producto deja más (${informesAnio})</div>
+    <div style="overflow-x:auto"><table><thead><tr><th>Producto</th><th class="num">Cantidad</th><th class="num">Vendido</th><th class="num">Ganancia bruta</th></tr></thead>
+    <tbody>${prodHtml || '<tr><td colspan="4" class="empty">Sin ventas este año</td></tr>'}</tbody></table></div>
+  </div>`;
+}
+function initInformesChart(){
+  const canvas = document.getElementById('informesChart');
+  if(!canvas || typeof Chart==='undefined') return;
+  if(informesChartInstance){ informesChartInstance.destroy(); informesChartInstance = null; }
+  const filas = tablaMensual(informesAnio);
+  informesChartInstance = new Chart(canvas, {
+    type:'bar',
+    data:{ labels: filas.map(f=>f.etiqueta), datasets:[
+      { label:'Ventas', data: filas.map(f=>Math.round(f.ventas)), backgroundColor:'#1F4E79' },
+      { label:'Ganancia', data: filas.map(f=>Math.round(f.ganancia)), backgroundColor: filas.map(f=>f.ganancia<0?'#A23B2E':'#3E6B4A') }
+    ]},
+    options:{ responsive:true, plugins:{legend:{position:'bottom'}}, scales:{ y:{ ticks:{ callback:v=> '$'+(Math.abs(v)>=1e6? (v/1e6).toFixed(1)+'M' : Math.round(v/1000)+'k') } } } }
+  });
+}
+
+// ---------------- MÁS (pantallas anteriores) ----------------
+function renderMas(){
+  return `<div class="card"><div class="card-title">Otras pantallas</div>
+    <div class="card-desc">Las pantallas anteriores siguen aquí con todos sus datos, por si las necesitas.</div>
+    <div class="mas-grid" style="padding:0 16px 16px">${legacyPermitidas().filter(t=>!['ventas','inventario'].includes(t.id))
+      .map(t=>`<button data-goto="${t.id}">${t.label}</button>`).join('')}</div></div>`;
+}
+
+// ---------------- HANDLERS NUEVOS ----------------
+function attachHandlersNuevos(){
+  document.querySelectorAll('[data-seg]').forEach(b=>{
+    b.onclick = ()=>{
+      const v = b.getAttribute('data-val');
+      const n = b.getAttribute('data-seg');
+      if(n==='producirVista') producirVista = v;
+      if(n==='invVista') invVista = v;
+      if(n==='clientesVista') clientesVista = v;
+      render(); window.scrollTo(0,0);
+    };
+  });
+  document.querySelectorAll('[data-goto]').forEach(el=>{
+    el.onclick = ()=>{
+      const inv = el.getAttribute('data-inv');
+      if(inv) invVista = inv;
+      if(el.getAttribute('data-goto')==='clientes') clientesVista = 'resumen';
+      activeTab = el.getAttribute('data-goto'); render(); window.scrollTo(0,0);
+    };
+  });
+  const buscar = document.getElementById('cli-buscar');
+  if(buscar){
+    const aplicar = ()=>{
+      clientesFiltro = buscar.value;
+      const t = normalizarNombre(buscar.value);
+      document.querySelectorAll('[data-cli-row]').forEach(r=>{ r.style.display = !t || r.getAttribute('data-cli-row').includes(t) ? '' : 'none'; });
+    };
+    buscar.oninput = aplicar; aplicar();
+  }
+  const on = (id, fn)=>{ const el = document.getElementById(id); if(el) el.onclick = fn; };
+  const selAnio = document.getElementById('inf-anio');
+  if(selAnio) selAnio.onchange = ()=>{ informesAnio = selAnio.value; render(); };
+  const selPer = document.getElementById('inf-per-cli');
+  if(selPer) selPer.onchange = ()=>{ informesPeriodoCliente = selPer.value; render(); };
+  const filasMes = ()=> tablaMensual(informesAnio).map(f=>({Mes:f.etiqueta, Ventas:Math.round(f.ventas), Costo:Math.round(f.costo), Gastos:Math.round(f.gastos), Ganancia:Math.round(f.ganancia)}));
+  const filasCli = ()=>{ const [d,h] = rangoPeriodoCliente(); return resumenClientes(d,h).filter(c=>c.periodo>0).sort((a,b)=>b.periodo-a.periodo).map(c=>({Cliente:c.nombre, Remisiones:c.remPeriodo, Vendido:Math.round(c.periodo)})); };
+  on('inf-mes-excel', ()=> exportToExcel(`ventas-ganancia-${informesAnio}`, `Resultado ${informesAnio}`, filasMes()));
+  on('inf-mes-pdf', ()=> exportToPDF(`ventas-ganancia-${informesAnio}`, `Ventas y ganancia ${informesAnio}`, filasMes()));
+  on('inf-cli-excel', ()=> exportToExcel('ventas-por-cliente', 'Ventas por cliente', filasCli()));
+  on('inf-cli-pdf', ()=> exportToPDF('ventas-por-cliente', 'Ventas por cliente', filasCli()));
+  on('cli-excel', ()=> exportToExcel('clientes-resumen', 'Clientes', filasExportClientes()));
+  on('cli-pdf', ()=> exportToPDF('clientes-resumen', 'Clientes: compras y deuda', filasExportClientes()));
+  on('pt-excel', ()=> exportToExcel('producto-terminado', 'Producto terminado', productoTerminadoLista().map(f=>({Producto:f.nombre, Cantidad:f.cant, Unidad:f.unidad, 'Costo unit.':Math.round(f.costo), Valor:Math.round(f.valor)}))));
+}
+
 // ---------------- RENDER ----------------
 function render(){
   if(!currentUser || !myRole || myRole==='sin-asignar') return;
@@ -1010,7 +1416,7 @@ function renderNav(){
   tabs.forEach(t=>{
     const b = document.createElement('button');
     b.textContent = t.label;
-    b.className = t.id===activeTab ? 'active' : '';
+    b.className = (t.id===activeTab || (t.id==='mas' && esPestanaLegacy(activeTab))) ? 'active' : '';
     b.onclick = ()=>{ activeTab = t.id; render(); };
     nav.appendChild(b);
   });
@@ -1021,31 +1427,40 @@ function renderPanels(){
   panels.innerHTML = '';
   const div = document.createElement('div');
   div.className = 'panel active';
-  if(activeTab==='dashboard') div.innerHTML = renderDashboard();
-  if(activeTab==='materiales') div.innerHTML = renderMateriales();
-  if(activeTab==='formulas') div.innerHTML = renderFormulas();
-  if(activeTab==='inventario') div.innerHTML = renderInventario();
-  if(activeTab==='produccion') div.innerHTML = renderProduccion();
-  if(activeTab==='produccionParrillas') div.innerHTML = renderProduccionParrillas();
-  if(activeTab==='produccionEnsamblador') div.innerHTML = renderProduccionEnsamblador();
+  if(esPestanaLegacy(activeTab)) div.innerHTML = `<div class="crumb"><button class="export-btn" data-goto="mas">← Más</button></div>`;
+  if(activeTab==='inicio') div.innerHTML = renderInicio();
+  if(activeTab==='producir') div.innerHTML = renderProducir();
+  if(activeTab==='inventarioGeneral') div.innerHTML = renderInventarioGeneral();
+  if(activeTab==='clientes') div.innerHTML = renderClientesNuevo();
+  if(activeTab==='informes') div.innerHTML = renderInformes();
+  if(activeTab==='mas') div.innerHTML = renderMas();
+  if(activeTab==='dashboard') div.innerHTML += renderDashboard();
+  if(activeTab==='materiales') div.innerHTML += renderMateriales();
+  if(activeTab==='formulas') div.innerHTML += renderFormulas();
+  if(activeTab==='inventario') div.innerHTML += renderInventario();
+  if(activeTab==='produccion') div.innerHTML += renderProduccion();
+  if(activeTab==='produccionParrillas') div.innerHTML += renderProduccionParrillas();
+  if(activeTab==='produccionEnsamblador') div.innerHTML += renderProduccionEnsamblador();
   if(activeTab==='ventas') div.innerHTML = renderVentas();
-  if(activeTab==='inventarioProducto') div.innerHTML = renderInventarioProductoTerminado();
-  if(activeTab==='contactos') div.innerHTML = renderContactos();
-  if(activeTab==='cartera') div.innerHTML = renderCartera();
-  if(activeTab==='consolidacion') div.innerHTML = renderConsolidacionCartera();
-  if(activeTab==='historico') div.innerHTML = renderHistorico();
-  if(activeTab==='administrativo') div.innerHTML = renderAdministrativo();
-  if(activeTab==='gastos') div.innerHTML = renderGastos();
-  if(activeTab==='activos') div.innerHTML = renderActivos();
-  if(activeTab==='finanzas') div.innerHTML = renderFinanzas();
-  if(activeTab==='reportes') div.innerHTML = renderReportes();
-  if(activeTab==='usuarios') div.innerHTML = renderUsuarios();
+  if(activeTab==='inventarioProducto') div.innerHTML += renderInventarioProductoTerminado();
+  if(activeTab==='contactos') div.innerHTML += renderContactos();
+  if(activeTab==='cartera') div.innerHTML += renderCartera();
+  if(activeTab==='consolidacion') div.innerHTML += renderConsolidacionCartera();
+  if(activeTab==='historico') div.innerHTML += renderHistorico();
+  if(activeTab==='administrativo') div.innerHTML += renderAdministrativo();
+  if(activeTab==='gastos') div.innerHTML += renderGastos();
+  if(activeTab==='activos') div.innerHTML += renderActivos();
+  if(activeTab==='finanzas') div.innerHTML += renderFinanzas();
+  if(activeTab==='reportes') div.innerHTML += renderReportes();
+  if(activeTab==='usuarios') div.innerHTML += renderUsuarios();
   panels.appendChild(div);
-  if(activeTab==='materiales') initMaterialesChart();
+  if(activeTab==='materiales' || (activeTab==='inventarioGeneral' && invVista==='materia')) initMaterialesChart();
+  if(activeTab==='informes') initInformesChart();
   if(activeTab==='finanzas'){ initPLChart(); initBalanceChart(); initReporteChart(); }
   if(activeTab==='reportes') initReportesProductoChart();
   attachHandlers();
   attachSearchFilters();
+  attachHandlersNuevos();
 }
 
 // ---------- Buscador genérico: oculta filas hasta que escribas ----------
@@ -2297,10 +2712,14 @@ function renderVentas(){
   const esParrillaForm = ventaProducto==='parrillas';
   const esUnidadesForm = ventaProducto!=='casata'; // parrillas, colchones, marcos, resorte bonell: se venden por unidad
   const tallaOptionsVenta = TALLAS_PARRILLA.map(t=>`<option value="${t}" ${t===ventaTalla?'selected':''}>${t}</option>`).join('');
-  const productosConMedida = ['colchon_resorte','colchon_ortopedico','marcos'];
+  const productosConMedida = ['colchon_resorte','colchon_ortopedico','marcos', ...TIPOS_COLCHON];
   const esMedidaForm = productosConMedida.includes(ventaProducto);
-  const medidaOpcionesActual = esMedidaForm ? PRECIOS_PRODUCTOS[ventaProducto].opciones : null;
-  const medidaOptionsVenta = medidaOpcionesActual ? Object.keys(medidaOpcionesActual).map(med=>`<option value="${med}" ${med===ventaMedida?'selected':''}>${med}</option>`).join('') : '';
+  const esColchonNuevo = TIPOS_COLCHON.includes(ventaProducto);
+  // Colchones con fórmula: la medida es la talla (1.40, 1.60...) para que la venta descuente del inventario producido
+  const medidaOpcionesActual = !esMedidaForm ? null : (esColchonNuevo
+    ? Object.fromEntries(TALLAS_PARRILLA.map(t=>[t, (PRECIOS_PRODUCTOS[ventaProducto.includes('ortopedico')?'colchon_ortopedico':'colchon_resorte'].opciones[TALLA_A_MEDIDA_PARRILLA[t]]) || '']))
+    : PRECIOS_PRODUCTOS[ventaProducto].opciones);
+  const medidaOptionsVenta = medidaOpcionesActual ? Object.keys(medidaOpcionesActual).map(med=>`<option value="${med}" ${med===ventaMedida?'selected':''}>${med}${esColchonNuevo ? ' — hay '+fmt(stockColchonesTerminados(ventaProducto, med)) : ''}</option>`).join('') : '';
   const esBonellForm = ventaProducto==='resorte_bonell';
   const esMaterialForm = ventaProducto==='material_suelto';
   const materialOptionsVenta = state.materiales.map(m=>`<option value="${m.nombre}" data-unidad="${m.unidad||'kg'}" ${m.nombre===ventaMaterialSel?'selected':''}>${m.nombre} (${m.unidad||'kg'}) — stock: ${fmt(stockMaterial(m.nombre))}</option>`).join('');
@@ -2330,8 +2749,7 @@ function renderVentas(){
         <select id="v-producto">
           <option value="casata" ${!esParrillaForm && ventaProducto==='casata'?'selected':''}>Casata</option>
           <option value="parrillas" ${esParrillaForm?'selected':''}>Parrillas Resortadas</option>
-          <option value="colchon_resorte" ${ventaProducto==='colchon_resorte'?'selected':''}>Colchón de Resorte</option>
-          <option value="colchon_ortopedico" ${ventaProducto==='colchon_ortopedico'?'selected':''}>Colchón Ortopédico</option>
+          ${TIPOS_COLCHON.map(t=>`<option value="${t}" ${ventaProducto===t?'selected':''}>Colchón ${NOMBRES_TIPOS_COLCHON[t]}</option>`).join('')}
           <option value="marcos" ${ventaProducto==='marcos'?'selected':''}>Marco</option>
           <option value="resorte_bonell" ${esBonellForm?'selected':''}>Resorte Bonell (unidad)</option>
           <option value="material_suelto" ${esMaterialForm?'selected':''}>Material suelto (retal, químicos, etc.)</option>
@@ -4288,7 +4706,7 @@ function renderUsuarios(){
     const permisosRow = u.role==='administrativo' ? `<tr><td colspan="2" style="background:var(--paper);">
       <div style="padding:8px 0;">
         <div style="font-size:10.5px;text-transform:uppercase;color:var(--ink-soft);font-weight:600;margin-bottom:6px;">Pestañas visibles para ${u.nombre||u.email}</div>
-        ${ALL_TABS.map(t=>`<label style="display:inline-flex;align-items:center;gap:4px;margin:0 12px 8px 0;font-size:12.5px;">
+        ${ALL_TABS.concat(LEGACY_TABS.filter(l=>!ALL_TABS.some(a=>a.id===l.id))).map(t=>`<label style="display:inline-flex;align-items:center;gap:4px;margin:0 12px 8px 0;font-size:12.5px;">
           <input type="checkbox" class="permiso-check" data-permiso-uid="${u.id}" data-tab-id="${t.id}" ${(u.permisos||[]).includes(t.id)?'checked':''}> ${t.label}
         </label>`).join('')}
       </div>
@@ -5319,7 +5737,7 @@ function attachHandlers(){
     try{
       if(seleccion==='casata'){
         const totalProducido = state.produccion.reduce((s,p)=>s+Number(p.cmTotal||0),0);
-        const totalVendido = state.ventas.filter(v=>v.producto!=='parrillas').reduce((s,v)=>s+Number(v.cmVendidos||0),0);
+        const totalVendido = state.ventas.filter(v=>(!v.producto || v.producto==='casata')).reduce((s,v)=>s+Number(v.cmVendidos||0),0);
         const nuevoAjuste = valorDeseado - (totalProducido - totalVendido);
         await db.collection('settings').doc('config').set({ajusteStockCasata: nuevoAjuste}, {merge:true});
       } else if(seleccion.startsWith('parrilla|')){
@@ -5346,7 +5764,7 @@ function attachHandlers(){
   if(ajusteStockCasataBtn) ajusteStockCasataBtn.onclick = async ()=>{
     const valorDeseado = Number(document.getElementById('ajuste-stock-casata').value);
     const totalProducido = state.produccion.reduce((s,p)=>s+Number(p.cmTotal||0),0);
-    const totalVendido = state.ventas.filter(v=>v.producto!=='parrillas').reduce((s,v)=>s+Number(v.cmVendidos||0),0);
+    const totalVendido = state.ventas.filter(v=>(!v.producto || v.producto==='casata')).reduce((s,v)=>s+Number(v.cmVendidos||0),0);
     const nuevoAjuste = valorDeseado - (totalProducido - totalVendido);
     if(!confirm(`Esto va a dejar el stock terminado de casata en ${fmt(valorDeseado)} cm. ¿Continuar?`)) return;
     try{ await db.collection('settings').doc('config').set({ajusteStockCasata: nuevoAjuste}, {merge:true}); }
