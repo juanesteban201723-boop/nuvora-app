@@ -93,6 +93,17 @@
   .add-btn{ grid-column:1/-1; font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:600; background:var(--blue); color:var(--paper); border:none; border-radius:4px; padding:10px; cursor:pointer; margin-top:2px; }
   .add-btn:hover{ background:var(--blue-dark); }
   .empty{ padding:16px; text-align:center; color:var(--ink-soft); font-size:12.5px; }
+  .doc-lineas-h{ display:flex; justify-content:space-between; align-items:center; padding:6px 16px 8px; font-family:'IBM Plex Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--blue); font-weight:600; border-top:1px solid var(--line); }
+  .doc-linea{ margin:0 16px 8px; border:1px solid var(--line); border-radius:6px; padding:8px; background:var(--paper); }
+  .doc-linea-top{ display:flex; gap:6px; align-items:center; }
+  .doc-linea-top select{ flex:1; font-size:13px; padding:8px; border:1px solid var(--line); border-radius:4px; background:var(--card); color:var(--ink); min-width:0; }
+  .doc-n{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); width:16px; text-align:center; }
+  .doc-hint{ font-size:11px; color:var(--ink-soft); margin:4px 0 0 22px; }
+  .doc-linea-nums{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-top:6px; }
+  .doc-linea-nums label{ font-size:9.5px; text-transform:uppercase; color:var(--ink-soft); font-weight:600; display:block; margin-bottom:2px; }
+  .doc-linea-nums input{ width:100%; font-size:13px; padding:7px; border:1px solid var(--line); border-radius:4px; background:var(--card); color:var(--ink); }
+  .doc-tot{ padding:7px 2px; font-weight:700; font-size:13px; }
+  .doc-total-bar{ display:flex; justify-content:space-between; margin:4px 16px 0; padding:10px 12px; background:var(--blue); color:var(--paper); border-radius:6px; font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:700; }
 
   .hero-card{ background:var(--blue); color:var(--paper); border-radius:8px; padding:20px 18px; margin-bottom:14px; }
   .hero-card .label{ font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; opacity:.8; }
@@ -2124,58 +2135,117 @@ function renderCompras(){
   </div>`;
 }
 
+function escAttr(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+function nuevoDocCompra(){
+  return {editando:false, numero:null, idsOriginales:[], proveedor:'', fecha:todayISO(), forma:'efectivo', obs:'', lineas:[{id:null, material:'', cantidad:'', costo:''}]};
+}
+function ultimoCostoMaterial(nombre){
+  const e = state.entradas.find(x=>x.material===nombre && Number(x.costoUnitario)>0);
+  return e ? Number(e.costoUnitario) : '';
+}
+function documentosCompra(){
+  const map = new Map();
+  state.entradas.forEach(e=>{
+    const k = e.numeroRecibido || ('id:'+e.id);
+    if(!map.has(k)) map.set(k, {clave:k, numero:e.numeroRecibido||'', fecha:e.fecha, proveedor:e.proveedor||'', forma:e.formaPago||'efectivo', obs:e.observaciones||'', lineas:[]});
+    map.get(k).lineas.push(e);
+  });
+  return [...map.values()];
+}
+function totalDocCompra(){
+  return docCompra.lineas.reduce((a,l)=>a+(Number(l.cantidad)||0)*(Number(l.costo)||0),0);
+}
+
 function renderInventario(){
   const canEdit = myRole==='admin' || myRole==='inventario' || myRole==='administrativo';
   const soloAdmin = myRole==='admin';
+  if(!docCompra) docCompra = nuevoDocCompra();
+  const d = docCompra;
 
-  const options = state.materiales.map(m=>`<option value="${m.nombre}" data-unidad="${m.unidad||'kg'}">${m.nombre} (${m.unidad||'kg'})</option>`).join('');
+  const provOpts = state.proveedoresCatalogo.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre))
+    .map(p=>`<option value="${escAttr(p.nombre)}" ${p.nombre===d.proveedor?'selected':''}>${p.nombre}</option>`).join('');
+  const matsOrdenados = state.materiales.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
 
-  let rows = state.entradas.slice(0,30).map(e=>{
-    const costoTotal = costoTotalEntrada(e);
-    let estadoPago = '<span class="tag-ok">Efectivo</span>';
-    if(e.formaPago==='credito'){
-      const saldo = saldoPendienteCompra(e);
-      estadoPago = saldo>0 ? `<span class="tag-bajo">Debemos ${fmtMoney(saldo)}</span>` : '<span class="tag-ok">Pagado</span>';
-    }
-    let filaEdicion = '';
-    if(soloAdmin && editandoEntradaId===e.id){
-      filaEdicion = `<tr><td colspan="6" style="background:var(--paper);">
-        <div class="form-grid">
-          <div class="full"><label>Material</label>
-            <select id="edit-e-material">${state.materiales.map(m=>`<option value="${m.nombre}" ${m.nombre===e.material?'selected':''}>${m.nombre} (${m.unidad||'kg'})</option>`).join('')}</select>
-          </div>
-          <div><label>Cantidad recibida</label><input id="edit-e-cantidad" type="number" step="any" value="${e.cantidad}"></div>
-          <div><label>Costo unitario ($)</label><input id="edit-e-costo" type="number" step="any" value="${e.costoUnitario||0}"></div>
-          <div><label>Fecha</label><input id="edit-e-fecha" type="date" value="${e.fecha}"></div>
-          <div>
-            <label>Forma de pago</label>
-            <select id="edit-e-forma">
-              <option value="efectivo" ${e.formaPago==='efectivo'?'selected':''}>Efectivo</option>
-              <option value="credito" ${e.formaPago==='credito'?'selected':''}>Fiado</option>
-            </select>
-          </div>
-          <div><label>Proveedor</label>
-            <select id="edit-e-proveedor">
-              <option value="">-- Sin proveedor / efectivo --</option>
-              ${state.proveedoresCatalogo.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>`<option value="${p.nombre}" ${p.nombre===e.proveedor?'selected':''}>${p.nombre}</option>`).join('')}
-            </select>
-          </div>
-          <div class="full"><label>Observaciones</label><input id="edit-e-obs" value="${e.observaciones||''}"></div>
-          <button class="add-btn" data-guardar-entrada="${e.id}" style="grid-column:1/-1;">Guardar</button>
-          <button class="export-btn" data-cancelar-entrada style="grid-column:1/-1;">Cancelar</button>
-        </div>
-      </td></tr>`;
-    }
-    return `<tr>
-      <td>${e.fecha}${(e.proveedor||e.numeroRecibido)?`<br><span style="font-size:10.5px;color:var(--ink-soft)">${e.numeroRecibido?`<b>${e.numeroRecibido}</b> · `:''}${e.proveedor||''}</span>`:''}${e.observaciones?`<br><span style="font-size:10px;color:var(--ink-soft);font-style:italic;">${e.observaciones}</span>`:''}</td>
-      <td>${e.material}</td>
-      <td class="num">+${fmt(e.cantidad)} ${e.unidad||''}</td>
-      <td class="num">${costoTotal>0?fmtMoney(costoTotal):'—'}</td>
-      <td>${estadoPago}</td>
-      <td>${canEdit ? `<button class="del-btn" data-recibido="${e.id}" title="Generar remisión de recibido" style="color:var(--blue);">🖨</button>` : ''}${soloAdmin ? `<button class="del-btn" data-editar-entrada="${e.id}" title="Editar">✏️</button><button class="del-btn" data-del-col="entradas" data-id="${e.id}">✕</button>` : ''}</td>
-    </tr>${filaEdicion}`;
+  const lineasHtml = d.lineas.map((l,i)=>{
+    const m = state.materiales.find(x=>x.nombre===l.material);
+    const unidad = m ? (m.unidad||'kg') : '';
+    const tot = (Number(l.cantidad)||0)*(Number(l.costo)||0);
+    const opts = matsOrdenados.map(x=>`<option value="${escAttr(x.nombre)}" ${x.nombre===l.material?'selected':''}>${x.nombre} (${x.unidad||'kg'})</option>`).join('');
+    const faltante = l.material && !m ? `<option value="${escAttr(l.material)}" selected>${l.material}</option>` : '';
+    return `<div class="doc-linea">
+      <div class="doc-linea-top">
+        <span class="doc-n">${i+1}</span>
+        <select data-l-mat="${i}"><option value="">— Elige material —</option>${faltante}${opts}</select>
+        <button class="del-btn" data-l-del="${i}" title="Quitar línea">✕</button>
+      </div>
+      ${m ? `<div class="doc-hint">Stock actual: <b>${fmt(stockMaterial(m.nombre))} ${unidad}</b>${ultimoCostoMaterial(m.nombre)!==''?` · Último costo: ${fmtMoney(ultimoCostoMaterial(m.nombre))}`:''}</div>` : ''}
+      <div class="doc-linea-nums">
+        <div><label>Cantidad${unidad?` (${unidad})`:''}</label><input data-l-cant="${i}" type="number" step="any" inputmode="decimal" value="${escAttr(l.cantidad)}" placeholder="0"></div>
+        <div><label>Costo unit.</label><input data-l-costo="${i}" type="number" step="any" inputmode="decimal" value="${escAttr(l.costo)}" placeholder="0"></div>
+        <div><label>Total</label><div class="doc-tot num" id="l-tot-${i}">${tot?fmtMoney(tot):'—'}</div></div>
+      </div>
+    </div>`;
   }).join('');
-  if(!rows) rows = `<tr><td colspan="6" class="empty">Sin entradas registradas aún</td></tr>`;
+
+  const nuevoMatHtml = (soloAdmin && docCompraNuevoMat) ? `
+    <div class="form-grid" style="border:1px dashed var(--line); border-radius:6px; margin:0 16px 10px; background:var(--paper);">
+      <div class="full"><label>Nombre del material nuevo</label><input id="nm-nombre" placeholder="Ej: Tela Yacar"></div>
+      <div><label>Tipo</label><input id="nm-tipo" placeholder="Ej: Tela, Químico"></div>
+      <div><label>Unidad</label><input id="nm-unidad" placeholder="Ej: mts, kg, unidad"></div>
+      <button class="add-btn" id="nm-crear">Crear material y usarlo</button>
+    </div>` : '';
+
+  const formHtml = canEdit ? `<div class="card">
+    <div class="card-title">${d.editando ? `✏️ Editando remisión ${d.numero||''}` : 'Nueva entrada de inventario'}</div>
+    <div class="card-desc">${d.editando ? 'Cambia lo que necesites (proveedor, fecha, cantidades, costos), agrega o quita líneas y toca Guardar cambios. El stock se recalcula solo.' : 'Llena el encabezado, agrega una línea por cada material que llegó y guarda. Todo queda en una sola remisión y suma al stock.'}</div>
+    <div class="form-grid">
+      <div class="full"><label>Proveedor</label>
+        <select id="dc-proveedor"><option value="">-- Selecciona proveedor --</option>${provOpts}</select>
+      </div>
+      <div><label>Fecha</label><input id="dc-fecha" type="date" value="${d.fecha||todayISO()}"></div>
+      <div><label>Pago</label>
+        <div class="seg" style="display:flex; gap:4px; margin:0;">
+          <button type="button" data-dc-forma="efectivo" class="${d.forma!=='credito'?'on':''}" style="flex:1; min-width:0; padding:8px 4px;">Contado</button>
+          <button type="button" data-dc-forma="credito" class="${d.forma==='credito'?'on':''}" style="flex:1; min-width:0; padding:8px 4px;">Crédito</button>
+        </div>
+      </div>
+      <div class="full"><label>Observaciones</label><input id="dc-obs" value="${escAttr(d.obs)}" placeholder="Ej: factura 1234, llegó con 2 rollos dañados"></div>
+    </div>
+    <div class="section-lineas">
+      <div class="doc-lineas-h"><span>Materiales (${d.lineas.length})</span>${soloAdmin?`<button class="export-btn" id="dc-nuevo-mat" style="font-size:11px;">${docCompraNuevoMat?'Cerrar':'+ Material nuevo'}</button>`:''}</div>
+      ${nuevoMatHtml}
+      ${lineasHtml}
+      <div style="padding:0 16px;"><button class="export-btn" id="dc-add-linea" style="width:100%; padding:10px;">+ Agregar línea</button></div>
+    </div>
+    <div class="doc-total-bar"><span>TOTAL REMISIÓN</span><span class="num" id="doc-total">${fmtMoney(totalDocCompra())}</span></div>
+    <div class="form-grid" style="padding-top:4px;">
+      <button class="add-btn" id="dc-guardar">${d.editando ? '💾 Guardar cambios' : '💾 Guardar entrada'}</button>
+      <button class="export-btn" id="dc-cancelar" style="grid-column:1/-1;">${d.editando ? 'Cancelar edición' : 'Limpiar formulario'}</button>
+    </div>
+  </div>` : '';
+
+  // ---- Lista de remisiones de compra (documentos) ----
+  const q = (buscaDocCompra||'').trim().toLowerCase();
+  let docs = documentosCompra();
+  if(q) docs = docs.filter(doc=> doc.numero.toLowerCase().includes(q) || doc.proveedor.toLowerCase().includes(q) || doc.lineas.some(l=>(l.material||'').toLowerCase().includes(q)));
+  const docsHtml = docs.slice(0,40).map(doc=>{
+    const total = doc.lineas.reduce((a,l)=>a+costoTotalEntrada(l),0);
+    let pago = '<span class="tag-ok">Contado</span>';
+    if(doc.forma==='credito'){
+      const saldo = doc.lineas.reduce((a,l)=>a+saldoPendienteCompra(l),0);
+      pago = saldo>0 ? `<span class="tag-bajo">Debemos ${fmtMoney(saldo)}</span>` : '<span class="tag-ok">Pagado</span>';
+    }
+    const resumen = doc.lineas.map(l=>`${fmt(l.cantidad)} ${l.unidad||''} ${l.material}`).join(' · ');
+    const editandoEste = docCompra && docCompra.editando && docCompra.clave===doc.clave;
+    return `<tr${editandoEste?' style="background:var(--blue-bg);"':''}>
+      <td><b>${doc.numero||'—'}</b><br><span style="font-size:10.5px;color:var(--ink-soft)">${doc.fecha}</span></td>
+      <td>${doc.proveedor||'<span style="color:var(--ink-soft)">(sin proveedor)</span>'}<br><span style="font-size:10.5px;color:var(--ink-soft)">${resumen}</span>${doc.obs?`<br><span style="font-size:10px;color:var(--ink-soft);font-style:italic;">${doc.obs}</span>`:''}</td>
+      <td class="num">${total>0?fmtMoney(total):'—'}<br>${pago}</td>
+      <td style="white-space:nowrap;">${canEdit?`<button class="del-btn" data-recibido="${doc.lineas[0].id}" title="Imprimir" style="color:var(--blue);">🖨</button>`:''}${soloAdmin?`<button class="del-btn" data-doc-editar="${escAttr(doc.clave)}" title="Editar">✏️</button><button class="del-btn" data-doc-borrar="${escAttr(doc.clave)}" title="Anular">✕</button>`:''}</td>
+    </tr>`;
+  }).join('');
+
+  const toolbar = (myRole==='admin' || myRole==='administrativo') ? `<div class="panel-toolbar"><button class="export-btn" id="export-entradas">⬇ Excel</button> <button class="export-btn" id="export-entradas-pdf">⬇ PDF</button></div>` : '';
 
   let stockTable = '';
   if(myRole!=='admin'){
@@ -2184,57 +2254,13 @@ function renderInventario(){
       + `</tbody></table></div>`;
   }
 
-  const toolbar = (myRole==='admin' || myRole==='administrativo') ? `<div class="panel-toolbar"><button class="export-btn" id="export-entradas">⬇ Excel</button> <button class="export-btn" id="export-entradas-pdf">⬇ PDF</button></div>` : '';
-
-  const formHtml = canEdit ? `
-    <div class="form-grid">
-      <div class="full"><label>Material</label>
-        <select id="e-material">${options || (myRole!=='admin' ? '<option value="">Pide al administrador que cargue materiales</option>' : '')}${myRole==='admin' ? '<option value="__nuevo__">+ Crear material nuevo</option>' : ''}</select>
-      </div>
-      <div class="full" id="e-nuevo-material-campos" style="display:none; border:1px dashed var(--line); border-radius:6px; padding:10px; background:var(--paper);">
-        <div class="form-grid">
-          <div class="full"><label>Nombre del material nuevo</label><input id="e-nuevo-nombre" placeholder="Ej: Tela Yacar"></div>
-          <div><label>Tipo</label><input id="e-nuevo-tipo" placeholder="Ej: Tela, Espuma, Químico"></div>
-          <div><label>Unidad</label><input id="e-nuevo-unidad" placeholder="Ej: mts, kg, unidad"></div>
-          <div class="full"><label>Stock mínimo (opcional)</label><input id="e-nuevo-minimo" type="number" step="any" placeholder="0"></div>
-        </div>
-      </div>
-      <div><label>Fecha</label><input id="e-fecha" type="date" value="${compraCab.fecha || todayISO()}"></div>
-      <div><label>Cantidad recibida</label><input id="e-cantidad" type="number" step="any"></div>
-      <div class="full"><label>Costo unitario ($ por kg/ml, opcional)</label><input id="e-costo" type="number" step="any" placeholder="Ej: 1900"></div>
-      <div>
-        <label>Forma de pago</label>
-        <select id="e-forma">
-          <option value="efectivo" ${compraCab.forma!=='credito'?'selected':''}>Efectivo (ya pagado)</option>
-          <option value="credito" ${compraCab.forma==='credito'?'selected':''}>Fiado (le debo al proveedor)</option>
-        </select>
-      </div>
-      <div><label>Proveedor (si es fiado)</label>
-        <select id="e-proveedor">
-          <option value="">-- Sin proveedor / efectivo --</option>
-          ${state.proveedoresCatalogo.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>`<option value="${p.nombre}" ${p.nombre===compraCab.proveedor?'selected':''}>${p.nombre}</option>`).join('')}
-        </select>
-        <div style="font-size:11px; color:var(--ink-soft); margin-top:4px;">¿No aparece? Créalo primero en Administrativo → Catálogo de Proveedores.</div>
-      </div>
-      <div class="full"><label>Observaciones (opcional)</label><input id="e-obs" value="${(compraCab.obs||'').replace(/"/g,'&quot;')}" placeholder="Ej: llegó con 2 rollos dañados"></div>
-      <button class="export-btn" id="e-add-item" style="grid-column:1/-1;">+ Agregar este material a la remisión</button>
-      ${carritoCompra.length ? `
-      <div class="full" style="border:1px solid var(--line); border-radius:6px; padding:8px; background:var(--paper);">
-        <div style="font-weight:700; font-size:12px; margin-bottom:6px;">🧾 Materiales en esta remisión (${carritoCompra.length})</div>
-        <table><thead><tr><th>Cant.</th><th>Material</th><th>C. unit.</th><th>C. total</th><th></th></tr></thead><tbody>
-        ${carritoCompra.map((it,i)=>`<tr><td class="num">${fmt(it.cantidad)} ${it.unidad||''}</td><td>${it.material}</td><td class="num">${it.costoUnitario?fmtMoney(it.costoUnitario):'—'}</td><td class="num">${it.costoTotal?fmtMoney(it.costoTotal):'—'}</td><td><button class="del-btn" data-quitar-item-compra="${i}" title="Quitar">✕</button></td></tr>`).join('')}
-        <tr><td colspan="3" style="text-align:right; font-weight:700;">TOTAL</td><td class="num" style="font-weight:700;">${fmtMoney(carritoCompra.reduce((a,it)=>a+it.costoTotal,0))}</td><td></td></tr>
-        </tbody></table>
-      </div>` : ''}
-      <button class="add-btn" id="e-add">✔ Registrar remisión de compra${carritoCompra.length?` (${carritoCompra.length} material${carritoCompra.length>1?'es':''})`:''}</button>
-    </div>` : '';
-
-  return `${toolbar}<div class="card">
-    <div class="card-title">Cargar Inventario</div>
-    <div class="card-desc">Registra cada compra o llegada de material. Se suma automáticamente al stock. Si es fiado, queda como deuda al proveedor.${soloAdmin ? ' Toca ✏️ en una fila para corregir nombre, cantidad o valor.' : ''}</div>
-    ${formHtml}
-    <table><thead><tr><th>Fecha</th><th>Material</th><th>Cantidad</th><th>Costo</th><th>Pago</th><th></th></tr></thead>
-    <tbody>${rows}</tbody></table>
+  return `${toolbar}${formHtml}
+  <div class="card">
+    <div class="card-title">Remisiones de compra</div>
+    <div class="card-desc">Cada remisión agrupa todos sus materiales.${soloAdmin?' Toca ✏️ para abrirla arriba y modificarla, o ✕ para anularla completa.':''}</div>
+    <div style="padding:0 16px 10px;"><input id="doc-buscar" value="${escAttr(buscaDocCompra)}" placeholder="🔎 Buscar por número, proveedor o material" style="width:100%; font-size:13px; padding:8px 9px; border:1px solid var(--line); border-radius:4px; background:var(--paper);"></div>
+    <table><thead><tr><th>N°</th><th>Proveedor / Detalle</th><th>Total</th><th></th></tr></thead>
+    <tbody>${docsHtml || '<tr><td colspan="4" class="empty">Sin remisiones de compra</td></tr>'}</tbody></table>
   </div>${stockTable}`;
 }
 
@@ -2557,6 +2583,9 @@ let carritoVenta = [];
 let ventaCab = {cliente:null, fecha:null, forma:'efectivo', obs:''};
 let carritoCompra = [];
 let compraCab = {fecha:null, forma:'efectivo', proveedor:'', obs:''};
+let docCompra = null;
+let docCompraNuevoMat = false;
+let buscaDocCompra = '';
 
 // ---------- Inventario de Producto Terminado (todos los productos que se venden) ----------
 function renderInventarioProductoTerminado(){
@@ -5011,6 +5040,174 @@ function attachHandlers(){
         editandoProduccionParrillaId = null;
         render();
       }catch(e){ alert('No se pudo guardar: ' + e.message); }
+    };
+  });
+
+  // ======== Entrada de inventario tipo documento (editable) ========
+  if(docCompra){
+    const dcProv = document.getElementById('dc-proveedor');
+    if(dcProv) dcProv.onchange = ()=>{ docCompra.proveedor = dcProv.value; };
+    const dcFecha = document.getElementById('dc-fecha');
+    if(dcFecha) dcFecha.onchange = ()=>{ docCompra.fecha = dcFecha.value; };
+    const dcObs = document.getElementById('dc-obs');
+    if(dcObs) dcObs.oninput = ()=>{ docCompra.obs = dcObs.value; };
+    document.querySelectorAll('[data-dc-forma]').forEach(b=>{
+      b.onclick = ()=>{ docCompra.forma = b.getAttribute('data-dc-forma'); render(); };
+    });
+    const actualizarTotales = (i)=>{
+      const l = docCompra.lineas[i];
+      const t = (Number(l.cantidad)||0)*(Number(l.costo)||0);
+      const c = document.getElementById('l-tot-'+i); if(c) c.textContent = t?fmtMoney(t):'—';
+      const g = document.getElementById('doc-total'); if(g) g.textContent = fmtMoney(totalDocCompra());
+    };
+    document.querySelectorAll('[data-l-mat]').forEach(s=>{
+      s.onchange = ()=>{
+        const i = Number(s.getAttribute('data-l-mat'));
+        docCompra.lineas[i].material = s.value;
+        if(s.value && (docCompra.lineas[i].costo==='' || docCompra.lineas[i].costo==null)) docCompra.lineas[i].costo = ultimoCostoMaterial(s.value);
+        render();
+      };
+    });
+    document.querySelectorAll('[data-l-cant]').forEach(inp=>{
+      inp.oninput = ()=>{ const i=Number(inp.getAttribute('data-l-cant')); docCompra.lineas[i].cantidad = inp.value; actualizarTotales(i); };
+    });
+    document.querySelectorAll('[data-l-costo]').forEach(inp=>{
+      inp.oninput = ()=>{ const i=Number(inp.getAttribute('data-l-costo')); docCompra.lineas[i].costo = inp.value; actualizarTotales(i); };
+    });
+    document.querySelectorAll('[data-l-del]').forEach(b=>{
+      b.onclick = ()=>{
+        docCompra.lineas.splice(Number(b.getAttribute('data-l-del')),1);
+        if(!docCompra.lineas.length) docCompra.lineas.push({id:null, material:'', cantidad:'', costo:''});
+        render();
+      };
+    });
+    const dcAddLinea = document.getElementById('dc-add-linea');
+    if(dcAddLinea) dcAddLinea.onclick = ()=>{ docCompra.lineas.push({id:null, material:'', cantidad:'', costo:''}); render(); };
+    const dcNuevoMat = document.getElementById('dc-nuevo-mat');
+    if(dcNuevoMat) dcNuevoMat.onclick = ()=>{ docCompraNuevoMat = !docCompraNuevoMat; render(); };
+    const nmCrear = document.getElementById('nm-crear');
+    if(nmCrear) nmCrear.onclick = async ()=>{
+      const nombre = document.getElementById('nm-nombre').value.trim();
+      const tipo = document.getElementById('nm-tipo').value.trim();
+      const unidad = document.getElementById('nm-unidad').value.trim();
+      if(!nombre || !tipo || !unidad){ alert('Completa nombre, tipo y unidad.'); return; }
+      if(state.materiales.some(m=>m.nombre.trim().toLowerCase()===nombre.toLowerCase())){ alert('Ese material ya existe, búscalo en la lista.'); return; }
+      try{
+        await db.collection('materiales').add({nombre, tipo, unidad, stockInicial:0, stockMinimo:0, costoInicial:0});
+        const vacia = docCompra.lineas.find(l=>!l.material);
+        if(vacia) vacia.material = nombre; else docCompra.lineas.push({id:null, material:nombre, cantidad:'', costo:''});
+        docCompraNuevoMat = false;
+        render();
+      }catch(e){ alert('No se pudo crear el material: ' + e.message); }
+    };
+    const dcCancelar = document.getElementById('dc-cancelar');
+    if(dcCancelar) dcCancelar.onclick = ()=>{
+      if(!docCompra.editando && docCompra.lineas.some(l=>l.material||l.cantidad) && !confirm('¿Borrar lo que llevas escrito?')) return;
+      docCompra = nuevoDocCompra(); render();
+    };
+
+    const dcGuardar = document.getElementById('dc-guardar');
+    if(dcGuardar) dcGuardar.onclick = async ()=>{
+      const d = docCompra;
+      const lineas = d.lineas.filter(l=>l.material && Number(l.cantidad)>0);
+      const incompletas = d.lineas.filter(l=>(l.material && !(Number(l.cantidad)>0)) || (!l.material && Number(l.cantidad)>0));
+      if(incompletas.length){ alert('Hay líneas incompletas: cada línea necesita material y cantidad (o quítala con ✕).'); return; }
+      if(!lineas.length){ alert('Agrega al menos un material con su cantidad.'); return; }
+      if(d.forma==='credito' && !d.proveedor){ alert('Para compras a crédito debes elegir el proveedor.'); return; }
+      const fecha = d.fecha || todayISO();
+      const datos = (l)=>{
+        const m = state.materiales.find(x=>x.nombre===l.material);
+        const cantidad = Number(l.cantidad), costoUnitario = Number(l.costo)||0;
+        return {material:l.material, unidad:m?(m.unidad||'kg'):'kg', fecha, cantidad, costoUnitario, costoTotal:cantidad*costoUnitario, formaPago:d.forma, proveedor:d.proveedor, observaciones:(d.obs||'').trim()};
+      };
+      const total = lineas.reduce((a,l)=>a+(Number(l.cantidad)||0)*(Number(l.costo)||0),0);
+      dcGuardar.disabled = true;
+      try{
+        if(!d.editando){
+          const numeroRecibido = await obtenerSiguienteNumeroRecibido();
+          const batch = db.batch();
+          lineas.forEach(l=> batch.set(db.collection('entradas').doc(), {...datos(l), numeroRecibido, creadoPor: myNombre}));
+          if(total>0 && d.forma==='efectivo'){
+            batch.set(db.collection('cuadreCaja').doc(), {fecha, tipo:'Salida', concepto:`Compra ${numeroRecibido}: ${lineas.map(l=>l.material).join(', ')}`, monto: total});
+          }
+          await batch.commit();
+          docCompra = nuevoDocCompra();
+          render();
+          alert(`Remisión ${numeroRecibido} guardada con ${lineas.length} material${lineas.length>1?'es':''}.`);
+        } else {
+          const idsQuedan = lineas.filter(l=>l.id).map(l=>l.id);
+          const idsBorrar = d.idsOriginales.filter(id=>!idsQuedan.includes(id));
+          const conPagos = idsBorrar.filter(id=>pagosProveedorDe(id)>0);
+          if(conPagos.length){ alert('No puedes quitar una línea que ya tiene pagos registrados al proveedor. Ajusta la cantidad o el costo en vez de quitarla.'); dcGuardar.disabled=false; return; }
+          const esLegacy = !d.numero;
+          const numeroRecibido = d.numero || await obtenerSiguienteNumeroRecibido();
+          const batch = db.batch();
+          lineas.forEach(l=>{
+            if(l.id) batch.update(db.collection('entradas').doc(l.id), {...datos(l), numeroRecibido});
+            else batch.set(db.collection('entradas').doc(), {...datos(l), numeroRecibido, creadoPor: myNombre});
+          });
+          idsBorrar.forEach(id=> batch.delete(db.collection('entradas').doc(id)));
+          if(!esLegacy){
+            const cajas = state.cuadreCaja.filter(c=> String(c.concepto||'').startsWith(`Compra ${numeroRecibido}:`));
+            const concepto = `Compra ${numeroRecibido}: ${lineas.map(l=>l.material).join(', ')}`;
+            if(d.forma==='efectivo' && total>0){
+              if(cajas.length){
+                batch.update(db.collection('cuadreCaja').doc(cajas[0].id), {fecha, concepto, monto: total});
+                cajas.slice(1).forEach(c=> batch.delete(db.collection('cuadreCaja').doc(c.id)));
+              } else batch.set(db.collection('cuadreCaja').doc(), {fecha, tipo:'Salida', concepto, monto: total});
+            } else {
+              cajas.forEach(c=> batch.delete(db.collection('cuadreCaja').doc(c.id)));
+            }
+          }
+          await batch.commit();
+          docCompra = nuevoDocCompra();
+          render();
+          alert(`Remisión ${numeroRecibido} actualizada.`);
+        }
+      }catch(e){ alert('No se pudo guardar: ' + e.message); dcGuardar.disabled = false; }
+    };
+  }
+
+  const docBuscar = document.getElementById('doc-buscar');
+  if(docBuscar) docBuscar.oninput = ()=>{
+    buscaDocCompra = docBuscar.value;
+    const pos = docBuscar.selectionStart;
+    render();
+    const nb = document.getElementById('doc-buscar');
+    if(nb){ nb.focus(); try{ nb.setSelectionRange(pos,pos); }catch(e){} }
+  };
+
+  document.querySelectorAll('[data-doc-editar]').forEach(b=>{
+    b.onclick = ()=>{
+      const clave = b.getAttribute('data-doc-editar');
+      const doc = documentosCompra().find(x=>x.clave===clave);
+      if(!doc) return;
+      docCompra = {
+        editando:true, clave, numero: doc.numero || null,
+        idsOriginales: doc.lineas.map(l=>l.id),
+        proveedor: doc.proveedor, fecha: doc.fecha, forma: doc.forma==='credito'?'credito':'efectivo', obs: doc.obs,
+        lineas: doc.lineas.map(l=>({id:l.id, material:l.material, cantidad:String(l.cantidad), costo: l.costoUnitario?String(l.costoUnitario):''}))
+      };
+      render();
+      window.scrollTo({top:0, behavior:'smooth'});
+    };
+  });
+
+  document.querySelectorAll('[data-doc-borrar]').forEach(b=>{
+    b.onclick = async ()=>{
+      const clave = b.getAttribute('data-doc-borrar');
+      const doc = documentosCompra().find(x=>x.clave===clave);
+      if(!doc) return;
+      if(doc.lineas.some(l=>pagosProveedorDe(l.id)>0)){ alert('Esta remisión ya tiene pagos al proveedor registrados. Borra primero esos pagos si de verdad quieres anularla.'); return; }
+      if(!confirm(`¿Anular la remisión ${doc.numero||''} completa (${doc.lineas.length} material${doc.lineas.length>1?'es':''})? Se descuenta del stock.`)) return;
+      try{
+        const batch = db.batch();
+        doc.lineas.forEach(l=> batch.delete(db.collection('entradas').doc(l.id)));
+        if(doc.numero) state.cuadreCaja.filter(c=> String(c.concepto||'').startsWith(`Compra ${doc.numero}:`)).forEach(c=> batch.delete(db.collection('cuadreCaja').doc(c.id)));
+        await batch.commit();
+        if(docCompra && docCompra.clave===clave) docCompra = nuevoDocCompra();
+        render();
+      }catch(e){ alert('No se pudo anular: ' + e.message); }
     };
   });
 
